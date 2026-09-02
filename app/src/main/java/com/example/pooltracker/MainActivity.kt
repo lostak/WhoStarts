@@ -10,17 +10,22 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -127,6 +132,7 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
 
     if (showAddDialog) {
         AddMatchupDialog(
+            knownPlayers = viewModel.knownPlayers,
             onDismiss = { showAddDialog = false },
             onConfirm = { teamA, teamB ->
                 viewModel.addMatchup(teamA, teamB)
@@ -352,11 +358,14 @@ fun WinnerTile(
 
 @Composable
 fun AddMatchupDialog(
+    knownPlayers: List<String>,
     onDismiss: () -> Unit,
-    onConfirm: (List<String>, List<String>) -> Unit
+    onConfirm: (Team, Team) -> Unit
 ) {
-    var teamAText by remember { mutableStateOf("") }
-    var teamBText by remember { mutableStateOf("") }
+    var teamAName by remember { mutableStateOf("") }
+    var teamBName by remember { mutableStateOf("") }
+    val teamAPlayers = remember { mutableStateListOf<String>() }
+    val teamBPlayers = remember { mutableStateListOf<String>() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -365,42 +374,46 @@ fun AddMatchupDialog(
         textContentColor = CueCream,
         title = { Text("New matchup") },
         text = {
-            Column {
-                Text("Enter players for each team, separated by commas.", color = OnSurfaceMuted)
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = teamAText,
-                    onValueChange = { teamAText = it },
-                    label = { Text("Team A (e.g. Alice, Carl)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Brass,
-                        cursorColor = Brass
-                    )
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                TeamInputSection(
+                    label = "Team A",
+                    teamName = teamAName,
+                    onTeamNameChange = { teamAName = it },
+                    players = teamAPlayers,
+                    knownPlayers = knownPlayers
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+
+                Spacer(modifier = Modifier.height(14.dp))
                 Text("vs", color = OnSurfaceMuted, modifier = Modifier.align(Alignment.CenterHorizontally))
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = teamBText,
-                    onValueChange = { teamBText = it },
-                    label = { Text("Team B (e.g. Bob, Dana)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Brass,
-                        cursorColor = Brass
-                    )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                TeamInputSection(
+                    label = "Team B",
+                    teamName = teamBName,
+                    onTeamNameChange = { teamBName = it },
+                    players = teamBPlayers,
+                    knownPlayers = knownPlayers
                 )
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    val teamA = teamAText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val teamB = teamBText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    if (teamA.isNotEmpty() && teamB.isNotEmpty()) {
+                    val teamA = Team(
+                        name = teamAName.trim().ifBlank { null },
+                        players = teamAPlayers.map { it.trim() }.filter { it.isNotEmpty() }
+                    )
+                    val teamB = Team(
+                        name = teamBName.trim().ifBlank { null },
+                        players = teamBPlayers.map { it.trim() }.filter { it.isNotEmpty() }
+                    )
+                    val validA = teamA.name != null || teamA.players.isNotEmpty()
+                    val validB = teamB.name != null || teamB.players.isNotEmpty()
+                    if (validA && validB) {
                         onConfirm(teamA, teamB)
                     }
                 }
@@ -411,6 +424,124 @@ fun AddMatchupDialog(
         }
     )
 }
+
+/**
+ * Input block for one side of a matchup: an optional team name, plus zero or
+ * more player name fields that can be added one at a time.
+ */
+@Composable
+fun TeamInputSection(
+    label: String,
+    teamName: String,
+    onTeamNameChange: (String) -> Unit,
+    players: SnapshotStateList<String>,
+    knownPlayers: List<String>
+) {
+    Column {
+        Text(label, color = Brass, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(modifier = Modifier.height(6.dp))
+
+        OutlinedTextField(
+            value = teamName,
+            onValueChange = onTeamNameChange,
+            label = { Text("Team name (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Brass,
+                cursorColor = Brass
+            )
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        players.forEachIndexed { index, playerName ->
+            PlayerInputRow(
+                value = playerName,
+                onValueChange = { players[index] = it },
+                onRemove = { players.removeAt(index) },
+                knownPlayers = knownPlayers,
+                alreadyChosen = players.filterIndexed { i, _ -> i != index }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        TextButton(onClick = { players.add("") }) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                tint = ChalkBlue,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Add player", color = ChalkBlue)
+        }
+    }
+}
+
+/** A single player name field with a remove button and inline autocomplete chips. */
+@Composable
+fun PlayerInputRow(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onRemove: () -> Unit,
+    knownPlayers: List<String>,
+    alreadyChosen: List<String>
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text("Player name") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Brass,
+                    cursorColor = Brass
+                )
+            )
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Close, contentDescription = "Remove player", tint = OnSurfaceMuted)
+            }
+        }
+
+        val suggestions = remember(value, knownPlayers, alreadyChosen) {
+            if (value.isBlank()) {
+                emptyList()
+            } else {
+                knownPlayers.filter { candidate ->
+                    candidate.contains(value, ignoreCase = true) &&
+                        !candidate.equals(value, ignoreCase = true) &&
+                        alreadyChosen.none { it.equals(candidate, ignoreCase = true) }
+                }.take(5)
+            }
+        }
+
+        if (suggestions.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(top = 4.dp, start = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                suggestions.forEach { suggestion ->
+                    SuggestionChip(
+                        onClick = { onValueChange(suggestion) },
+                        label = { Text(suggestion, fontSize = 12.sp) },
+                        colors = SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = FeltGreenDark,
+                            labelColor = CueCream
+                        ),
+                        border = null
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 /**
  * Line chart of running win-differential (Team A wins minus Team B wins) over

@@ -8,6 +8,14 @@ class PoolViewModel(app: Application) : AndroidViewModel(app) {
 
     val matchups = mutableStateListOf<Matchup>()
 
+    /** Every distinct player name seen across all matchups, for autocomplete suggestions. */
+    val knownPlayers: List<String>
+        get() = matchups
+            .flatMap { it.teamA.players + it.teamB.players }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .sorted()
+
     init {
         matchups.addAll(Storage.load(app))
     }
@@ -16,7 +24,7 @@ class PoolViewModel(app: Application) : AndroidViewModel(app) {
         Storage.save(getApplication(), matchups)
     }
 
-    fun addMatchup(teamA: List<String>, teamB: List<String>) {
+    fun addMatchup(teamA: Team, teamB: Team) {
         matchups.add(Matchup(teamA = teamA, teamB = teamB))
         persist()
     }

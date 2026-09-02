@@ -17,8 +17,8 @@ object Storage {
         for (m in matchups) {
             val obj = JSONObject()
             obj.put("id", m.id)
-            obj.put("teamA", JSONArray(m.teamA))
-            obj.put("teamB", JSONArray(m.teamB))
+            obj.put("teamA", teamToJson(m.teamA))
+            obj.put("teamB", teamToJson(m.teamB))
             val historyArr = JSONArray()
             for (h in m.history) {
                 val hObj = JSONObject()
@@ -44,8 +44,8 @@ object Storage {
         for (i in 0 until arr.length()) {
             val obj = arr.getJSONObject(i)
             val id = obj.getString("id")
-            val teamA = obj.getJSONArray("teamA").toStringList()
-            val teamB = obj.getJSONArray("teamB").toStringList()
+            val teamA = parseTeam(obj.get("teamA"))
+            val teamB = parseTeam(obj.get("teamB"))
             val history = mutableListOf<GameResult>()
             val historyArr = obj.optJSONArray("history") ?: JSONArray()
             for (j in 0 until historyArr.length()) {
@@ -55,6 +55,30 @@ object Storage {
             result.add(Matchup(id = id, teamA = teamA, teamB = teamB, history = history))
         }
         return result
+    }
+
+    private fun teamToJson(team: Team): JSONObject {
+        val obj = JSONObject()
+        if (team.name != null) obj.put("name", team.name)
+        obj.put("players", JSONArray(team.players))
+        return obj
+    }
+
+    /**
+     * Parses a team from either the current format (a JSON object with
+     * "name"/"players") or the older format (a plain JSON array of player
+     * name strings), so existing saved data doesn't break on update.
+     */
+    private fun parseTeam(raw: Any): Team {
+        return when (raw) {
+            is JSONObject -> {
+                val name = if (raw.has("name") && !raw.isNull("name")) raw.getString("name") else null
+                val players = raw.optJSONArray("players")?.toStringList() ?: emptyList()
+                Team(name = name, players = players)
+            }
+            is JSONArray -> Team(name = null, players = raw.toStringList())
+            else -> Team()
+        }
     }
 
     private fun JSONArray.toStringList(): List<String> {
