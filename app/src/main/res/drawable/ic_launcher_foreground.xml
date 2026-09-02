@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft shadow under the ball -->
+    <path android:fillColor="#33000000" android:pathData="M54,86 m-27,0 a27,7 0 1,0 54,0 a27,7 0 1,0 -54,0" />
+
+    <!-- Ball body -->
+    <path android:fillColor="#1A1A1A" android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0" />
+
+    <!-- Glossy highlight -->
+    <path android:fillColor="#33FFFFFF" android:pathData="M43,40 m-8,0 a8,5 0 1,0 16,0 a8,5 0 1,0 -16,0" />
+
+    <!-- White number circle -->
+    <path android:fillColor="#F3EFE2" android:pathData="M54,54 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+
+    <!-- Figure-eight mark -->
+    <path android:fillColor="#1A1A1A" android:pathData="M54,48 m-5.5,0 a5.5,5 0 1,0 11,0 a5.5,5 0 1,0 -11,0" />
+    <path android:fillColor="#1A1A1A" android:pathData="M54,60.5 m-6.5,0 a6.5,6 0 1,0 13,0 a6.5,6 0 1,0 -13,0" />
+</vector>

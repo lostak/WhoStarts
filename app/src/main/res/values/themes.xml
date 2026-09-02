@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.PoolTracker" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0E1A15</item>
+        <item name="android:statusBarColor">#0B2F22</item>
+        <item name="android:navigationBarColor">#0B2F22</item>
+    </style>
+</resources>
