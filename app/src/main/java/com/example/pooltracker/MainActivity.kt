@@ -3,6 +3,7 @@ package com.example.pooltracker
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -25,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
@@ -200,6 +202,18 @@ fun EightBallMark(size: androidx.compose.ui.unit.Dp) {
     }
 }
 
+/**
+ * Describes a confirmed win handed to [WinnerTile] so it knows to run its
+ * celebration. [seq] increments on each confirmation so repeat wins by the
+ * same team still retrigger the animation.
+ */
+data class ConfirmRequest(
+    val side: Int = 1,
+    val tapOffset: Offset = Offset.Zero,
+    val tileCoords: LayoutCoordinates? = null,
+    val seq: Int = 0
+)
+
 @Composable
 fun MatchupRow(
     matchup: Matchup,
@@ -220,6 +234,16 @@ fun MatchupRow(
     var burstTrigger by remember { mutableStateOf(0) }
     var burstOrigin by remember { mutableStateOf<Offset?>(null) }
     var cardCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    // Staged (tapped but not yet confirmed) winner, plus where the tap landed so
+    // the celebration can still originate from the finger once confirmed.
+    var pendingWinner by remember { mutableStateOf<Int?>(null) }
+    var pendingTapOffset by remember { mutableStateOf(Offset.Zero) }
+    var pendingTileCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var confirmTrigger by remember { mutableStateOf(ConfirmRequest()) }
+
+    // Clear any staged selection if the underlying matchup changes elsewhere.
+    LaunchedEffect(matchup.history.size) { pendingWinner = null }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -277,8 +301,15 @@ fun MatchupRow(
                         colorA = colorA,
                         colorB = colorB,
                         lastWinner = lastWinner,
-                        onSelectWinner = onToggle,
-                        onBurst = { side, tapOffset, tileCoords ->
+                        pendingWinner = pendingWinner,
+                        confirmRequest = confirmTrigger,
+                        onStageWinner = { side, tapOffset, tileCoords ->
+                            // Staging only — nothing is recorded until confirmed.
+                            pendingWinner = if (pendingWinner == side) null else side
+                            pendingTapOffset = tapOffset
+                            pendingTileCoords = tileCoords
+                        },
+                        onConfirmedBurst = { side, tapOffset, tileCoords ->
                             burstSide = side
                             // Translate the tap from the tile's coordinate space into
                             // the card's, so the explosion originates exactly where
@@ -291,6 +322,52 @@ fun MatchupRow(
                             burstTrigger++
                         }
                     )
+
+                    // Confirmation step: a deliberate second action guards against
+                    // an accidental tap being saved as a game result.
+                    AnimatedVisibility(visible = pendingWinner != null) {
+                        val stagedSide = pendingWinner ?: 1
+                        val stagedName = if (stagedSide == 1) matchup.teamAName() else matchup.teamBName()
+                        val stagedColor = if (stagedSide == 1) colorA else colorB
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = { pendingWinner = null },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Cancel", color = OnSurfaceMuted)
+                                }
+                                Button(
+                                    onClick = {
+                                        val side = stagedSide
+                                        val off = pendingTapOffset
+                                        val coords = pendingTileCoords
+                                        pendingWinner = null
+                                        confirmTrigger = ConfirmRequest(side, off, coords, confirmTrigger.seq + 1)
+                                        onToggle(side)
+                                    },
+                                    modifier = Modifier.weight(2f),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = stagedColor,
+                                        contentColor = contrastingTextColor(stagedColor)
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("$stagedName won", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
 
                     if (lastWinner == null) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -375,6 +452,16 @@ fun MatchupRow(
  *   exploding on arrival.
  * - A soft gradient always sweeps toward whichever side is currently ahead.
  */
+/**
+ * A large, two-sided "who won" control. Tapping a side *stages* that team as
+ * the pending winner (highlighted with a dashed outline) but records nothing —
+ * the caller shows a confirm button, and only on confirmation does the win
+ * animation play and the result save. This guards against accidental taps.
+ *
+ * - Confirming the side that's already winning pulses and bursts in place.
+ * - Confirming the other side flings the puck across with a springy bounce.
+ * - A soft gradient always sweeps toward whichever side is currently ahead.
+ */
 @Composable
 fun WinnerTile(
     teamAName: String,
@@ -382,10 +469,11 @@ fun WinnerTile(
     colorA: Color,
     colorB: Color,
     lastWinner: Int?,
-    onSelectWinner: (Int) -> Unit,
-    onBurst: (side: Int, tapOffset: Offset, tileCoords: LayoutCoordinates?) -> Unit
+    pendingWinner: Int?,
+    confirmRequest: ConfirmRequest,
+    onStageWinner: (side: Int, tapOffset: Offset, tileCoords: LayoutCoordinates?) -> Unit,
+    onConfirmedBurst: (side: Int, tapOffset: Offset, tileCoords: LayoutCoordinates?) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
     val posFraction = remember { Animatable(if (lastWinner == 2) 1f else 0f) }
     val pulseScale = remember { Animatable(1f) }
     var tileCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -396,34 +484,31 @@ fun WinnerTile(
         label = "indicatorAlpha"
     )
 
-    fun handleTap(side: Int, tapOffset: Offset) {
-        val isRepeat = lastWinner == side
-        val targetFraction = if (side == 1) 0f else 1f
-        scope.launch {
-            if (isRepeat) {
-                // Pulse and burst in place — same winner again.
-                pulseScale.animateTo(1.18f, tween(130, easing = FastOutSlowInEasing))
-                onBurst(side, tapOffset, tileCoords)
-                pulseScale.animateTo(
-                    1f,
-                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
-                )
-            } else {
-                // Fling to the new side; the spring's natural overshoot gives the bounce.
-                launch {
-                    delay(110)
-                    onBurst(side, tapOffset, tileCoords)
-                }
-                posFraction.animateTo(
-                    targetFraction,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioHighBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
-                )
+    // Runs the celebration only once a win has actually been confirmed.
+    LaunchedEffect(confirmRequest.seq) {
+        if (confirmRequest.seq == 0) return@LaunchedEffect
+        val side = confirmRequest.side
+        val wasAlreadyWinning = posFraction.value == (if (side == 1) 0f else 1f)
+        if (wasAlreadyWinning) {
+            pulseScale.animateTo(1.18f, tween(130, easing = FastOutSlowInEasing))
+            onConfirmedBurst(side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
+            pulseScale.animateTo(
+                1f,
+                spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+            )
+        } else {
+            launch {
+                delay(110)
+                onConfirmedBurst(side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
             }
+            posFraction.animateTo(
+                if (side == 1) 0f else 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioHighBouncy,
+                    stiffness = Spring.StiffnessLow
+                )
+            )
         }
-        onSelectWinner(side)
     }
 
     BoxWithConstraints(
@@ -473,24 +558,15 @@ fun WinnerTile(
             )
 
             Row(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .pointerInput(lastWinner) {
-                            detectTapGestures { offset -> handleTap(1, offset) }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = teamAName,
-                        fontWeight = if (lastWinner == 1) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 17.sp,
-                        color = if (lastWinner == 1) textOnA else CueCream,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                }
+                TeamHalf(
+                    name = teamAName,
+                    isWinner = lastWinner == 1,
+                    isPending = pendingWinner == 1,
+                    winnerTextColor = textOnA,
+                    pendingColor = colorA,
+                    modifier = Modifier.weight(1f),
+                    onTap = { offset -> onStageWinner(1, offset, tileCoords) }
+                )
                 Box(
                     modifier = Modifier
                         .width(1.dp)
@@ -498,29 +574,62 @@ fun WinnerTile(
                         .align(Alignment.CenterVertically)
                         .background(OnSurfaceMuted.copy(alpha = 0.25f))
                 )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .pointerInput(lastWinner) {
-                            detectTapGestures { offset ->
-                                // Offset is local to this half; shift into full-tile space.
-                                handleTap(2, Offset(offset.x + size.width.toFloat(), offset.y))
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = teamBName,
-                        fontWeight = if (lastWinner == 2) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        fontSize = 17.sp,
-                        color = if (lastWinner == 2) textOnB else CueCream,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    )
-                }
+                TeamHalf(
+                    name = teamBName,
+                    isWinner = lastWinner == 2,
+                    isPending = pendingWinner == 2,
+                    winnerTextColor = textOnB,
+                    pendingColor = colorB,
+                    modifier = Modifier.weight(1f),
+                    onTap = { offset ->
+                        // Offset is local to this half; shift into full-tile space.
+                        onStageWinner(2, Offset(offset.x + (tileCoords?.size?.width ?: 0) / 2f, offset.y), tileCoords)
+                    }
+                )
             }
         }
+    }
+}
+
+/** One tappable half of the winner tile. */
+@Composable
+fun TeamHalf(
+    name: String,
+    isWinner: Boolean,
+    isPending: Boolean,
+    winnerTextColor: Color,
+    pendingColor: Color,
+    modifier: Modifier = Modifier,
+    onTap: (Offset) -> Unit
+) {
+    val pendingBorderAlpha by animateFloatAsState(
+        targetValue = if (isPending) 1f else 0f,
+        animationSpec = tween(180),
+        label = "pendingBorder"
+    )
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .padding(4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .border(
+                width = 2.dp,
+                color = pendingColor.copy(alpha = pendingBorderAlpha),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .pointerInput(Unit) {
+                detectTapGestures { offset -> onTap(offset) }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = name,
+            fontWeight = if (isWinner || isPending) FontWeight.ExtraBold else FontWeight.SemiBold,
+            fontSize = 17.sp,
+            color = if (isWinner) winnerTextColor else CueCream,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
     }
 }
 
