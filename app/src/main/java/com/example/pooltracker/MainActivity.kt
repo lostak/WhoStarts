@@ -3,10 +3,14 @@ package com.example.pooltracker
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,16 +41,26 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,6 +198,8 @@ fun MatchupRow(
     onDelete: () -> Unit
 ) {
     val lastWinner = matchup.lastWinner
+    var showCoinFlip by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -227,6 +243,16 @@ fun MatchupRow(
                     onSelectWinner = onToggle
                 )
 
+                if (lastWinner == null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { showCoinFlip = true },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text("🪙 Flip a coin to decide", color = ChalkBlue, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
@@ -248,13 +274,29 @@ fun MatchupRow(
             }
         }
     }
+
+    if (showCoinFlip) {
+        CoinFlipDialog(
+            teamAName = matchup.teamAName(),
+            teamBName = matchup.teamBName(),
+            onResult = { winner ->
+                onToggle(winner)
+                showCoinFlip = false
+            },
+            onDismiss = { showCoinFlip = false }
+        )
+    }
 }
 
 /**
  * A large, tappable "who won" tile. Tapping the left half always records a win
  * for Team A, tapping the right half always records a win for Team B — so the
  * same team can win repeatedly without the control needing to "toggle" first.
- * A colored indicator animates to whichever side most recently won.
+ *
+ * - Tapping the side that's already winning makes the puck pulse and burst in place.
+ * - Tapping the other side flings the puck across (with a physical bounce-and-settle),
+ *   exploding on arrival.
+ * - A soft gradient always sweeps toward whichever side is currently ahead.
  */
 @Composable
 fun WinnerTile(
@@ -263,11 +305,49 @@ fun WinnerTile(
     lastWinner: Int?,
     onSelectWinner: (Int) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    val posFraction = remember { Animatable(if (lastWinner == 2) 1f else 0f) }
+    val pulseScale = remember { Animatable(1f) }
+    var burstSide by remember { mutableStateOf(1) }
+    var burstTrigger by remember { mutableStateOf(0) }
+
     val indicatorAlpha by animateFloatAsState(
         targetValue = if (lastWinner == null) 0f else 1f,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "indicatorAlpha"
     )
+
+    fun handleTap(side: Int) {
+        val isRepeat = lastWinner == side
+        val targetFraction = if (side == 1) 0f else 1f
+        scope.launch {
+            if (isRepeat) {
+                // Pulse and burst in place — same winner again.
+                pulseScale.animateTo(1.18f, tween(130, easing = FastOutSlowInEasing))
+                burstSide = side
+                burstTrigger++
+                pulseScale.animateTo(
+                    1f,
+                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+                )
+            } else {
+                // Fling to the new side; the spring's natural overshoot gives the bounce.
+                launch {
+                    delay(110)
+                    burstSide = side
+                    burstTrigger++
+                }
+                posFraction.animateTo(
+                    targetFraction,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioHighBouncy,
+                        stiffness = Spring.StiffnessLow
+                    )
+                )
+            }
+        }
+        onSelectWinner(side)
+    }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -275,14 +355,7 @@ fun WinnerTile(
             .height(72.dp)
     ) {
         val halfWidth = maxWidth / 2
-        val indicatorOffset by animateDpAsState(
-            targetValue = if (lastWinner == 2) halfWidth else 0.dp,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessLow
-            ),
-            label = "indicatorOffset"
-        )
+        val tint = lerp(FeltGreenLight, Brass, posFraction.value)
 
         Box(
             modifier = Modifier
@@ -290,17 +363,35 @@ fun WinnerTile(
                 .clip(RoundedCornerShape(20.dp))
                 .background(FeltGreenDark)
         ) {
-            // Sliding highlight showing the current leader.
+            // Gradient fade that always sweeps toward the current leader.
             Box(
                 modifier = Modifier
-                    .offset(x = indicatorOffset)
+                    .matchParentSize()
+                    .alpha(indicatorAlpha)
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to FeltGreenDark,
+                            posFraction.value.coerceIn(0.06f, 0.94f) to tint.copy(alpha = 0.6f),
+                            1f to FeltGreenDark
+                        )
+                    )
+            )
+
+            // Solid puck marking exactly who is winning right now.
+            Box(
+                modifier = Modifier
+                    .offset(x = halfWidth * posFraction.value)
                     .width(halfWidth)
                     .fillMaxHeight()
                     .alpha(indicatorAlpha)
+                    .graphicsLayer {
+                        scaleX = pulseScale.value
+                        scaleY = pulseScale.value
+                    }
                     .clip(RoundedCornerShape(20.dp))
                     .background(
                         Brush.horizontalGradient(
-                            if (lastWinner == 2) listOf(Brass, BrassLight) else listOf(FeltGreenLight, FeltGreen)
+                            if (posFraction.value > 0.5f) listOf(Brass, BrassLight) else listOf(FeltGreenLight, FeltGreen)
                         )
                     )
             )
@@ -313,7 +404,7 @@ fun WinnerTile(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
-                        ) { onSelectWinner(1) },
+                        ) { handleTap(1) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -339,7 +430,7 @@ fun WinnerTile(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
-                        ) { onSelectWinner(2) },
+                        ) { handleTap(2) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -352,7 +443,195 @@ fun WinnerTile(
                     )
                 }
             }
+
+            BurstEffect(
+                trigger = burstTrigger,
+                color = if (burstSide == 2) Brass else FeltGreenLight,
+                originXFraction = if (burstSide == 1) 0.25f else 0.75f,
+                modifier = Modifier.matchParentSize()
+            )
         }
+    }
+}
+
+/**
+ * A small radial particle burst used to punctuate a win. Increment [trigger]
+ * to fire it again (even to the same side) since the value itself, not just
+ * its identity, needs to change to relaunch the effect.
+ */
+@Composable
+fun BurstEffect(
+    trigger: Int,
+    color: Color,
+    modifier: Modifier = Modifier,
+    originXFraction: Float = 0.5f,
+    originYFraction: Float = 0.5f,
+    particleCount: Int = 14,
+    maxRadiusDp: Dp = 46.dp
+) {
+    val progress = remember { Animatable(1f) }
+    val angles = remember(trigger) { List(particleCount) { Random.nextDouble(0.0, 2 * PI) } }
+    val distances = remember(trigger) { List(particleCount) { 0.55f + Random.nextFloat() * 0.45f } }
+
+    LaunchedEffect(trigger) {
+        if (trigger <= 0) return@LaunchedEffect
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(600, easing = LinearOutSlowInEasing))
+    }
+
+    if (progress.value < 1f) {
+        Canvas(modifier = modifier) {
+            val cx = size.width * originXFraction
+            val cy = size.height * originYFraction
+            val maxR = maxRadiusDp.toPx()
+            angles.forEachIndexed { i, ang ->
+                val dist = distances[i] * maxR * progress.value
+                val x = cx + cos(ang).toFloat() * dist
+                val y = cy + sin(ang).toFloat() * dist
+                val particleAlpha = 1f - progress.value
+                val r = 4.dp.toPx() * (1f - progress.value * 0.4f)
+                drawCircle(color = color.copy(alpha = particleAlpha), radius = r, center = Offset(x, y))
+            }
+        }
+    }
+}
+
+/**
+ * A pseudo-3D coin flip: the coin spins several full rotations around the
+ * vertical axis and settles showing whichever team's name won the toss.
+ */
+@Composable
+fun CoinFlipDialog(
+    teamAName: String,
+    teamBName: String,
+    onResult: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val angle = remember { Animatable(0f) }
+    val lift = remember { Animatable(0f) }
+    var isFlipping by remember { mutableStateOf(false) }
+    var resultTeam by remember { mutableStateOf<Int?>(null) }
+    var burstTrigger by remember { mutableStateOf(0) }
+
+    fun startFlip() {
+        if (isFlipping) return
+        isFlipping = true
+        resultTeam = null
+        scope.launch {
+            val outcome = if (Random.nextBoolean()) 1 else 2
+            val spins = Random.nextInt(6, 10)
+            val finalAngle = spins * 360f + if (outcome == 1) 0f else 180f
+
+            launch {
+                lift.animateTo(-46f, tween(280, easing = FastOutSlowInEasing))
+                lift.animateTo(
+                    0f,
+                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+                )
+            }
+            angle.animateTo(finalAngle, tween(1500, easing = FastOutSlowInEasing))
+
+            resultTeam = outcome
+            isFlipping = false
+            burstTrigger++
+            delay(700)
+            onResult(outcome)
+        }
+    }
+
+    Dialog(onDismissRequest = { if (!isFlipping) onDismiss() }) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .width(280.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Coin Flip", color = CueCream, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Box(
+                    modifier = Modifier.size(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(150.dp)
+                            .offset(y = lift.value.dp)
+                            .graphicsLayer {
+                                rotationY = angle.value
+                                cameraDistance = 16f * density
+                            }
+                    ) {
+                        val normalized = ((angle.value % 360f) + 360f) % 360f
+                        val showFront = normalized < 90f || normalized > 270f
+                        if (showFront) {
+                            CoinFace(label = teamAName, color = FeltGreenLight)
+                        } else {
+                            Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
+                                CoinFace(label = teamBName, color = Brass)
+                            }
+                        }
+                    }
+
+                    BurstEffect(
+                        trigger = burstTrigger,
+                        color = if (resultTeam == 2) Brass else FeltGreenLight,
+                        modifier = Modifier.matchParentSize(),
+                        particleCount = 18,
+                        maxRadiusDp = 90.dp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                when {
+                    isFlipping -> Text("Flipping…", color = OnSurfaceMuted)
+                    resultTeam != null -> Text(
+                        "${if (resultTeam == 1) teamAName else teamBName} wins the flip!",
+                        color = Brass,
+                        fontWeight = FontWeight.Bold
+                    )
+                    else -> Button(
+                        onClick = { startFlip() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Brass, contentColor = Color(0xFF241A00))
+                    ) {
+                        Text("Flip", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (!isFlipping && resultTeam == null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
+                }
+            }
+        }
+    }
+}
+
+/** One face of the coin: a metallic-looking circle with a team's name centered on it. */
+@Composable
+fun CoinFace(label: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(CircleShape)
+            .background(Brush.radialGradient(listOf(BrassLight, color)))
+            .padding(14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF1A1200),
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 3
+        )
     }
 }
 
