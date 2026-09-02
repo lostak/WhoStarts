@@ -3,8 +3,14 @@ package com.example.pooltracker
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,17 +23,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 class MainActivity : ComponentActivity() {
@@ -199,43 +212,14 @@ fun MatchupRow(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = matchup.teamAName(),
-                        color = if (lastWinner == 1) Brass else OnSurfaceMuted,
-                        fontWeight = if (lastWinner == 1) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    // Switch: unchecked = Team A won last, checked = Team B won last
-                    Switch(
-                        checked = lastWinner == 2,
-                        onCheckedChange = { checkedForB ->
-                            onToggle(if (checkedForB) 2 else 1)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Brass,
-                            checkedTrackColor = FeltGreenLight,
-                            uncheckedThumbColor = CueCream,
-                            uncheckedTrackColor = FeltGreenDark,
-                            uncheckedBorderColor = FeltGreenLight
-                        )
-                    )
-
-                    Text(
-                        text = matchup.teamBName(),
-                        color = if (lastWinner == 2) Brass else OnSurfaceMuted,
-                        fontWeight = if (lastWinner == 2) FontWeight.Bold else FontWeight.Normal,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                WinnerTile(
+                    teamAName = matchup.teamAName(),
+                    teamBName = matchup.teamBName(),
+                    lastWinner = lastWinner,
+                    onSelectWinner = onToggle
+                )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -254,6 +238,112 @@ fun MatchupRow(
                     TextButton(onClick = onHistoryClick) {
                         Text("History (${matchup.history.size})", color = ChalkBlue)
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A large, tappable "who won" tile. Tapping the left half always records a win
+ * for Team A, tapping the right half always records a win for Team B — so the
+ * same team can win repeatedly without the control needing to "toggle" first.
+ * A colored indicator animates to whichever side most recently won.
+ */
+@Composable
+fun WinnerTile(
+    teamAName: String,
+    teamBName: String,
+    lastWinner: Int?,
+    onSelectWinner: (Int) -> Unit
+) {
+    val indicatorAlpha by animateFloatAsState(
+        targetValue = if (lastWinner == null) 0f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "indicatorAlpha"
+    )
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+    ) {
+        val halfWidth = maxWidth / 2
+        val indicatorOffset by animateDpAsState(
+            targetValue = if (lastWinner == 2) halfWidth else 0.dp,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            ),
+            label = "indicatorOffset"
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(20.dp))
+                .background(FeltGreenDark)
+        ) {
+            // Sliding highlight showing the current leader.
+            Box(
+                modifier = Modifier
+                    .offset(x = indicatorOffset)
+                    .width(halfWidth)
+                    .fillMaxHeight()
+                    .alpha(indicatorAlpha)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            if (lastWinner == 2) listOf(Brass, BrassLight) else listOf(FeltGreenLight, FeltGreen)
+                        )
+                    )
+            )
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelectWinner(1) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = teamAName,
+                        fontWeight = if (lastWinner == 1) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontSize = 17.sp,
+                        color = if (lastWinner == 1) Color(0xFF07160F) else CueCream,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .fillMaxHeight(0.5f)
+                        .align(Alignment.CenterVertically)
+                        .background(OnSurfaceMuted.copy(alpha = 0.25f))
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelectWinner(2) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = teamBName,
+                        fontWeight = if (lastWinner == 2) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontSize = 17.sp,
+                        color = if (lastWinner == 2) Color(0xFF241A00) else CueCream,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
                 }
             }
         }
@@ -322,6 +412,62 @@ fun AddMatchupDialog(
     )
 }
 
+/**
+ * Line chart of running win-differential (Team A wins minus Team B wins) over
+ * the course of the matchup's history. Rises when A is on top, dips when B is.
+ */
+@Composable
+fun MomentumLineChart(history: List<GameResult>, modifier: Modifier = Modifier) {
+    val diffs = remember(history) {
+        var running = 0
+        history.map { r -> running += if (r.winnerTeam == 1) 1 else -1; running }
+    }
+    val maxAbs = (diffs.maxOfOrNull { abs(it) } ?: 1).coerceAtLeast(1)
+    val lineColor = Brass
+    val zeroLineColor = OnSurfaceMuted
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val topPad = 10f
+        val usableH = h - topPad * 2
+        val midY = h / 2f
+        val stepX = if (diffs.size > 1) w / (diffs.size - 1) else w
+
+        // Zero line (parity between teams)
+        drawLine(
+            color = zeroLineColor.copy(alpha = 0.25f),
+            start = Offset(0f, midY),
+            end = Offset(w, midY),
+            strokeWidth = 1.dp.toPx()
+        )
+
+        val points = diffs.mapIndexed { i, d ->
+            Offset(i * stepX, midY - (d.toFloat() / maxAbs) * (usableH / 2f))
+        }
+
+        val path = Path().apply {
+            points.forEachIndexed { i, p ->
+                if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+            }
+        }
+        drawPath(
+            path = path,
+            color = lineColor,
+            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+
+        points.forEachIndexed { i, p ->
+            val isA = history[i].winnerTeam == 1
+            drawCircle(
+                color = if (isA) FeltGreenLight else Brass,
+                radius = 4.5.dp.toPx(),
+                center = p
+            )
+        }
+    }
+}
+
 @Composable
 fun HistoryDialog(matchup: Matchup, onDismiss: () -> Unit) {
     val formatter = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
@@ -377,6 +523,28 @@ fun HistoryDialog(matchup: Matchup, onDismiss: () -> Unit) {
                             "${((winsB.toFloat() / total) * 100).toInt()}%",
                             color = Brass,
                             fontSize = 12.sp
+                        )
+                    }
+
+                    if (matchup.history.size >= 2) {
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Momentum", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
+                            Row {
+                                Text(matchup.teamAName(), color = FeltGreenLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("  ·  ", color = OnSurfaceMuted, fontSize = 11.sp)
+                                Text(matchup.teamBName(), color = Brass, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        MomentumLineChart(
+                            history = matchup.history,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(90.dp)
                         )
                     }
 
