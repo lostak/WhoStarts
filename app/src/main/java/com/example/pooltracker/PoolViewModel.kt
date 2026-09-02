@@ -34,6 +34,14 @@ class PoolViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
+    /** Update a matchup's team info (name, players, color) and ball assignment, keeping its history. */
+    fun updateTeams(matchupId: String, teamA: Team, teamB: Team, solidsTeam: Int?) {
+        val idx = matchups.indexOfFirst { it.id == matchupId }
+        if (idx == -1) return
+        matchups[idx] = matchups[idx].copy(teamA = teamA, teamB = teamB, solidsTeam = solidsTeam)
+        persist()
+    }
+
     /** Record who won the most recent game for this matchup. team = 1 or 2 */
     fun recordResult(matchup: Matchup, team: Int) {
         val idx = matchups.indexOfFirst { it.id == matchup.id }

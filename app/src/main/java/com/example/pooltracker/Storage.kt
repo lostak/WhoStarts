@@ -27,6 +27,7 @@ object Storage {
                 historyArr.put(hObj)
             }
             obj.put("history", historyArr)
+            if (m.solidsTeam != null) obj.put("solidsTeam", m.solidsTeam)
             arr.put(obj)
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -52,7 +53,8 @@ object Storage {
                 val hObj = historyArr.getJSONObject(j)
                 history.add(GameResult(hObj.getLong("timestamp"), hObj.getInt("winnerTeam")))
             }
-            result.add(Matchup(id = id, teamA = teamA, teamB = teamB, history = history))
+            val solidsTeam = if (obj.has("solidsTeam") && !obj.isNull("solidsTeam")) obj.getInt("solidsTeam") else null
+            result.add(Matchup(id = id, teamA = teamA, teamB = teamB, history = history, solidsTeam = solidsTeam))
         }
         return result
     }
@@ -61,20 +63,22 @@ object Storage {
         val obj = JSONObject()
         if (team.name != null) obj.put("name", team.name)
         obj.put("players", JSONArray(team.players))
+        if (team.colorArgb != null) obj.put("colorArgb", team.colorArgb)
         return obj
     }
 
     /**
      * Parses a team from either the current format (a JSON object with
-     * "name"/"players") or the older format (a plain JSON array of player
-     * name strings), so existing saved data doesn't break on update.
+     * "name"/"players"/"colorArgb") or the older format (a plain JSON array of
+     * player name strings), so existing saved data doesn't break on update.
      */
     private fun parseTeam(raw: Any): Team {
         return when (raw) {
             is JSONObject -> {
                 val name = if (raw.has("name") && !raw.isNull("name")) raw.getString("name") else null
                 val players = raw.optJSONArray("players")?.toStringList() ?: emptyList()
-                Team(name = name, players = players)
+                val colorArgb = if (raw.has("colorArgb") && !raw.isNull("colorArgb")) raw.getInt("colorArgb") else null
+                Team(name = name, players = players, colorArgb = colorArgb)
             }
             is JSONArray -> Team(name = null, players = raw.toStringList())
             else -> Team()
