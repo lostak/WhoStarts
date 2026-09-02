@@ -55,7 +55,7 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         EightBallMark(size = 28.dp)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("Pool Tracker", fontWeight = FontWeight.Bold)
+                        Text("WhoStarts", fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

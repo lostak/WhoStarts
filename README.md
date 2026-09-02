@@ -1,4 +1,4 @@
-# Pool Tracker (Android)
+# WhoStarts (Android)
 
 A simple Android app to track who won the last game of pool.
 
