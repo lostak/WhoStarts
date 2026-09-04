@@ -38,12 +38,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -284,14 +287,17 @@ fun MatchupRow(
                         }
                     }
 
-                    if (matchup.solidsTeam != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        BallAssignmentRow(
-                            teamAName = matchup.teamAName(),
-                            teamBName = matchup.teamBName(),
-                            solidsTeam = matchup.solidsTeam
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    BallAssignmentRow(
+                        teamAName = matchup.teamAName(),
+                        teamBName = matchup.teamBName(),
+                        solidsTeam = matchup.solidsTeam,
+                        colorA = colorA,
+                        colorB = colorB,
+                        onAssign = { newSolids ->
+                            onUpdateTeams(matchup.teamA, matchup.teamB, newSolids)
+                        }
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -854,48 +860,103 @@ fun CoinFace(label: String, color: Color) {
     }
 }
 
-/** Small inline badges showing which team has solids and which has stripes. */
+/**
+ * Inline, tappable solids/stripes assignment shown directly on the matchup tile.
+ * Tap a team to give them solids (the other side automatically gets stripes);
+ * tap the team that already has solids to clear the assignment entirely.
+ */
 @Composable
-fun BallAssignmentRow(teamAName: String, teamBName: String, solidsTeam: Int) {
-    val solidsName = if (solidsTeam == 1) teamAName else teamBName
-    val stripesName = if (solidsTeam == 1) teamBName else teamAName
+fun BallAssignmentRow(
+    teamAName: String,
+    teamBName: String,
+    solidsTeam: Int?,
+    colorA: Color,
+    colorB: Color,
+    onAssign: (Int?) -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        BallBadge(label = solidsName, striped = false)
-        BallBadge(label = stripesName, striped = true)
+        BallChip(
+            teamName = teamAName,
+            // Team A has solids when solidsTeam == 1, stripes when == 2.
+            striped = solidsTeam == 2,
+            assigned = solidsTeam != null,
+            accent = colorA,
+            modifier = Modifier.weight(1f),
+            onClick = { onAssign(if (solidsTeam == 1) null else 1) }
+        )
+        BallChip(
+            teamName = teamBName,
+            striped = solidsTeam == 1,
+            assigned = solidsTeam != null,
+            accent = colorB,
+            modifier = Modifier.weight(1f),
+            onClick = { onAssign(if (solidsTeam == 2) null else 2) }
+        )
     }
 }
 
-/** A tiny pool-ball glyph plus a team label. */
+/** A tappable chip showing a team's ball group (or an invitation to set one). */
 @Composable
-fun BallBadge(label: String, striped: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Canvas(modifier = Modifier.size(14.dp)) {
-            val r = size.minDimension / 2f
-            val c = Offset(size.width / 2f, size.height / 2f)
-            if (striped) {
-                drawCircle(color = CueCream, radius = r, center = c)
-                // Horizontal stripe band across the middle.
-                drawRect(
-                    color = Brass,
-                    topLeft = Offset(0f, c.y - r * 0.48f),
-                    size = androidx.compose.ui.geometry.Size(size.width, r * 0.96f)
-                )
-                drawCircle(color = CueCream.copy(alpha = 0f), radius = r, center = c)
-            } else {
-                drawCircle(color = Brass, radius = r, center = c)
-                drawCircle(color = CueCream, radius = r * 0.4f, center = c)
-            }
-        }
-        Spacer(modifier = Modifier.width(5.dp))
+fun BallChip(
+    teamName: String,
+    striped: Boolean,
+    assigned: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (assigned) accent.copy(alpha = 0.16f) else Color.Transparent
+            )
+            .border(
+                width = 1.dp,
+                color = if (assigned) accent.copy(alpha = 0.55f) else OnSurfaceMuted.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BallGlyph(striped = striped, dimmed = !assigned, accent = accent)
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = if (striped) "$label · stripes" else "$label · solids",
+            text = if (assigned) (if (striped) "stripes" else "solids") else "set balls",
             fontSize = 11.sp,
-            color = OnSurfaceMuted
+            fontWeight = if (assigned) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (assigned) CueCream else OnSurfaceMuted,
+            maxLines = 1
         )
+    }
+}
+
+/** A tiny pool-ball glyph: solid, or with a stripe band across the middle. */
+@Composable
+fun BallGlyph(striped: Boolean, dimmed: Boolean, accent: Color) {
+    val ballColor = if (dimmed) OnSurfaceMuted.copy(alpha = 0.45f) else accent
+    Canvas(modifier = Modifier.size(14.dp)) {
+        val r = size.minDimension / 2f
+        val c = Offset(size.width / 2f, size.height / 2f)
+        if (striped) {
+            // White ball with a colored band across the middle.
+            drawCircle(color = CueCream, radius = r, center = c)
+            clipPath(Path().apply { addOval(Rect(center = c, radius = r)) }) {
+                drawRect(
+                    color = ballColor,
+                    topLeft = Offset(0f, c.y - r * 0.5f),
+                    size = Size(size.width, r)
+                )
+            }
+        } else {
+            drawCircle(color = ballColor, radius = r, center = c)
+            drawCircle(color = CueCream, radius = r * 0.38f, center = c)
+        }
     }
 }
 
@@ -1003,36 +1064,6 @@ fun MatchupSettingsDialog(
 
                 Spacer(modifier = Modifier.height(18.dp))
                 HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
-                Spacer(modifier = Modifier.height(18.dp))
-
-                Text("Solids / stripes", color = Brass, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                val nameAResolved = nameA.trim().ifBlank {
-                    playersA.filter { it.isNotBlank() }.joinToString(" & ").ifBlank { "Team A" }
-                }
-                val nameBResolved = nameB.trim().ifBlank {
-                    playersB.filter { it.isNotBlank() }.joinToString(" & ").ifBlank { "Team B" }
-                }
-                Column {
-                    BallAssignmentOption(
-                        text = "$nameAResolved has solids",
-                        selected = solidsTeam == 1,
-                        onClick = { solidsTeam = 1 }
-                    )
-                    BallAssignmentOption(
-                        text = "$nameBResolved has solids",
-                        selected = solidsTeam == 2,
-                        onClick = { solidsTeam = 2 }
-                    )
-                    BallAssignmentOption(
-                        text = "Not assigned",
-                        selected = solidsTeam == null,
-                        onClick = { solidsTeam = null }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-                HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(10.dp))
 
                 if (!confirmDelete) {
@@ -1095,28 +1126,6 @@ fun MatchupSettingsDialog(
             TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
         }
     )
-}
-
-/** A single radio-style row for choosing the solids/stripes assignment. */
-@Composable
-fun BallAssignmentOption(text: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(
-            selected = selected,
-            onClick = onClick,
-            colors = RadioButtonDefaults.colors(
-                selectedColor = Brass,
-                unselectedColor = OnSurfaceMuted
-            )
-        )
-        Text(text, color = CueCream, fontSize = 14.sp)
-    }
 }
 
 @Composable
