@@ -17,8 +17,9 @@ object Storage {
         for (m in matchups) {
             val obj = JSONObject()
             obj.put("id", m.id)
-            obj.put("teamA", teamToJson(m.teamA))
-            obj.put("teamB", teamToJson(m.teamB))
+            val teamsArr = JSONArray()
+            for (t in m.teams) teamsArr.put(teamToJson(t))
+            obj.put("teams", teamsArr)
             val historyArr = JSONArray()
             for (h in m.history) {
                 val hObj = JSONObject()
@@ -45,16 +46,36 @@ object Storage {
         for (i in 0 until arr.length()) {
             val obj = arr.getJSONObject(i)
             val id = obj.getString("id")
-            val teamA = parseTeam(obj.get("teamA"))
-            val teamB = parseTeam(obj.get("teamB"))
+
+            // Current format stores an ordered "teams" array. Older saves stored
+            // exactly two teams under "teamA"/"teamB"; fall back to those so
+            // existing data keeps working.
+            val teams = mutableListOf<Team>()
+            val teamsArr = obj.optJSONArray("teams")
+            if (teamsArr != null) {
+                for (j in 0 until teamsArr.length()) teams.add(parseTeam(teamsArr.get(j)))
+            } else {
+                if (obj.has("teamA")) teams.add(parseTeam(obj.get("teamA")))
+                if (obj.has("teamB")) teams.add(parseTeam(obj.get("teamB")))
+            }
+            if (teams.size < 2) continue
+
             val history = mutableListOf<GameResult>()
             val historyArr = obj.optJSONArray("history") ?: JSONArray()
             for (j in 0 until historyArr.length()) {
                 val hObj = historyArr.getJSONObject(j)
-                history.add(GameResult(hObj.getLong("timestamp"), hObj.getInt("winnerTeam")))
+                val winner = hObj.getInt("winnerTeam")
+                // Drop results pointing at a team that no longer exists.
+                if (winner in 1..teams.size) {
+                    history.add(GameResult(hObj.getLong("timestamp"), winner))
+                }
             }
-            val solidsTeam = if (obj.has("solidsTeam") && !obj.isNull("solidsTeam")) obj.getInt("solidsTeam") else null
-            result.add(Matchup(id = id, teamA = teamA, teamB = teamB, history = history, solidsTeam = solidsTeam))
+
+            val solidsTeam = if (obj.has("solidsTeam") && !obj.isNull("solidsTeam")) {
+                obj.getInt("solidsTeam").takeIf { it in 1..teams.size }
+            } else null
+
+            result.add(Matchup(id = id, teams = teams, history = history, solidsTeam = solidsTeam))
         }
         return result
     }
@@ -67,11 +88,6 @@ object Storage {
         return obj
     }
 
-    /**
-     * Parses a team from either the current format (a JSON object with
-     * "name"/"players"/"colorArgb") or the older format (a plain JSON array of
-     * player name strings), so existing saved data doesn't break on update.
-     */
     private fun parseTeam(raw: Any): Team {
         return when (raw) {
             is JSONObject -> {

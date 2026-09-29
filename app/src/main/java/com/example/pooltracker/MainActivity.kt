@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -54,7 +55,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -70,6 +74,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -83,6 +88,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/** Largest number of teams a single matchup may hold. */
+const val MAX_TEAMS = 8
+
+/** Preset palette offered when picking a team color. */
+val TeamColorChoices = listOf(
+    Color(0xFF1C5A3D), // felt green
+    Color(0xFFC9A24B), // brass
+    Color(0xFF4E7C8C), // chalk blue
+    Color(0xFFB3452F), // clay red
+    Color(0xFF6C4E9C), // purple
+    Color(0xFFCF7A2E), // orange
+    Color(0xFF2F7FB3), // bright blue
+    Color(0xFFAE3B62), // magenta
+    Color(0xFF3F8F55), // leaf green
+    Color(0xFF8C8C8C)  // grey
+)
+
+/** Fallback color for the team at [index] (0-based) when none was chosen. */
+fun defaultTeamColor(index: Int): Color = TeamColorChoices[index % TeamColorChoices.size]
+
+/** Resolved colors for every team in a matchup, in order. */
+fun Matchup.teamColors(): List<Color> =
+    teams.mapIndexed { i, t -> t.color(defaultTeamColor(i)) }
+
+/** Picks readable dark or cream text depending on how light [bg] is. */
+fun contrastingTextColor(bg: Color): Color =
+    if (bg.luminance() > 0.5f) Color(0xFF15231C) else CueCream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,11 +160,7 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     EightBallMark(size = 56.dp)
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        "No matchups yet",
-                        color = OnSurfaceMuted,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Text("No matchups yet", color = OnSurfaceMuted, fontWeight = FontWeight.SemiBold)
                     Text("Tap + to rack one up", color = OnSurfaceMuted, fontSize = 13.sp)
                 }
             }
@@ -150,8 +179,8 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
                         onToggle = { team -> viewModel.recordResult(matchup, team) },
                         onHistoryClick = { historyTarget = matchup },
                         onDelete = { viewModel.removeMatchup(matchup) },
-                        onUpdateTeams = { teamA, teamB, solidsTeam ->
-                            viewModel.updateTeams(matchup.id, teamA, teamB, solidsTeam)
+                        onUpdateTeams = { teams, solidsTeam ->
+                            viewModel.updateTeams(matchup.id, teams, solidsTeam)
                         }
                     )
                 }
@@ -163,8 +192,8 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
         AddMatchupDialog(
             knownPlayers = viewModel.knownPlayers,
             onDismiss = { showAddDialog = false },
-            onConfirm = { teamA, teamB ->
-                viewModel.addMatchup(teamA, teamB)
+            onConfirm = { teams ->
+                viewModel.addMatchup(teams)
                 showAddDialog = false
             }
         )
@@ -181,7 +210,7 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
 
 /** A small stylized eight-ball mark used as the in-app logo. */
 @Composable
-fun EightBallMark(size: androidx.compose.ui.unit.Dp) {
+fun EightBallMark(size: Dp) {
     Canvas(modifier = Modifier.size(size)) {
         val r = this.size.minDimension / 2f
         val center = Offset(this.size.width / 2f, this.size.height / 2f)
@@ -192,16 +221,8 @@ fun EightBallMark(size: androidx.compose.ui.unit.Dp) {
             center = Offset(center.x - r * 0.32f, center.y - r * 0.35f)
         )
         drawCircle(color = CueCream, radius = r * 0.46f, center = center)
-        drawCircle(
-            color = Color(0xFF1A1A1A),
-            radius = r * 0.18f,
-            center = Offset(center.x, center.y - r * 0.18f)
-        )
-        drawCircle(
-            color = Color(0xFF1A1A1A),
-            radius = r * 0.22f,
-            center = Offset(center.x, center.y + r * 0.2f)
-        )
+        drawCircle(color = Color(0xFF1A1A1A), radius = r * 0.18f, center = Offset(center.x, center.y - r * 0.18f))
+        drawCircle(color = Color(0xFF1A1A1A), radius = r * 0.22f, center = Offset(center.x, center.y + r * 0.2f))
     }
 }
 
@@ -224,14 +245,12 @@ fun MatchupRow(
     onToggle: (Int) -> Unit,
     onHistoryClick: () -> Unit,
     onDelete: () -> Unit,
-    onUpdateTeams: (Team, Team, Int?) -> Unit
+    onUpdateTeams: (List<Team>, Int?) -> Unit
 ) {
     val lastWinner = matchup.lastWinner
-    var showCoinFlip by remember { mutableStateOf(false) }
+    val colors = matchup.teamColors()
+    var showTiebreaker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
-
-    val colorA = matchup.teamA.color(FeltGreenLight)
-    val colorB = matchup.teamB.color(Brass)
 
     var burstSide by remember { mutableStateOf(1) }
     var burstTrigger by remember { mutableStateOf(0) }
@@ -245,7 +264,6 @@ fun MatchupRow(
     var pendingTileCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var confirmTrigger by remember { mutableStateOf(ConfirmRequest()) }
 
-    // Clear any staged selection if the underlying matchup changes elsewhere.
     LaunchedEffect(matchup.history.size) { pendingWinner = null }
 
     Card(
@@ -262,9 +280,7 @@ fun MatchupRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.horizontalGradient(listOf(FeltGreenDark, SurfaceVariant, SurfaceVariant))
-                    )
+                    .background(Brush.horizontalGradient(listOf(FeltGreenDark, SurfaceVariant, SurfaceVariant)))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -272,45 +288,47 @@ fun MatchupRow(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "${matchup.teamAName()}  vs  ${matchup.teamBName()}",
-                            fontWeight = FontWeight.Bold,
-                            color = CueCream,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { showSettings = true }) {
-                            Icon(
-                                Icons.Default.Settings,
-                                contentDescription = "Matchup settings",
-                                tint = OnSurfaceMuted
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = matchup.teams.joinToString("  vs  ") { it.displayName() },
+                                fontWeight = FontWeight.Bold,
+                                color = CueCream
                             )
+                            if (!matchup.isHeadToHead) {
+                                Text(
+                                    text = "${matchup.teamCount}-way",
+                                    fontSize = 11.sp,
+                                    color = OnSurfaceMuted
+                                )
+                            }
+                        }
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Matchup settings", tint = OnSurfaceMuted)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    BallAssignmentRow(
-                        teamAName = matchup.teamAName(),
-                        teamBName = matchup.teamBName(),
-                        solidsTeam = matchup.solidsTeam,
-                        colorA = colorA,
-                        colorB = colorB,
-                        onAssign = { newSolids ->
-                            onUpdateTeams(matchup.teamA, matchup.teamB, newSolids)
-                        }
-                    )
+                    // Solids/stripes only makes sense head-to-head.
+                    if (matchup.isHeadToHead) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        BallAssignmentRow(
+                            teamAName = matchup.teamName(1),
+                            teamBName = matchup.teamName(2),
+                            solidsTeam = matchup.solidsTeam,
+                            colorA = colors[0],
+                            colorB = colors[1],
+                            onAssign = { newSolids -> onUpdateTeams(matchup.teams, newSolids) }
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     WinnerTile(
-                        teamAName = matchup.teamAName(),
-                        teamBName = matchup.teamBName(),
-                        colorA = colorA,
-                        colorB = colorB,
+                        teamNames = matchup.teams.map { it.displayName() },
+                        colors = colors,
                         lastWinner = lastWinner,
                         pendingWinner = pendingWinner,
                         confirmRequest = confirmTrigger,
                         onStageWinner = { side, tapOffset, tileCoords ->
-                            // Staging only — nothing is recorded until confirmed.
                             pendingWinner = if (pendingWinner == side) null else side
                             pendingTapOffset = tapOffset
                             pendingTileCoords = tileCoords
@@ -322,9 +340,7 @@ fun MatchupRow(
                             // the finger landed even though it renders card-wide.
                             burstOrigin = if (tileCoords != null && cardCoords != null) {
                                 cardCoords!!.localPositionOf(tileCoords, tapOffset)
-                            } else {
-                                null
-                            }
+                            } else null
                             burstTrigger++
                         }
                     )
@@ -333,8 +349,8 @@ fun MatchupRow(
                     // an accidental tap being saved as a game result.
                     AnimatedVisibility(visible = pendingWinner != null) {
                         val stagedSide = pendingWinner ?: 1
-                        val stagedName = if (stagedSide == 1) matchup.teamAName() else matchup.teamBName()
-                        val stagedColor = if (stagedSide == 1) colorA else colorB
+                        val stagedName = matchup.teamName(stagedSide)
+                        val stagedColor = colors.getOrElse(stagedSide - 1) { Brass }
                         Column(modifier = Modifier.fillMaxWidth()) {
                             Spacer(modifier = Modifier.height(10.dp))
                             Row(
@@ -363,13 +379,9 @@ fun MatchupRow(
                                         contentColor = contrastingTextColor(stagedColor)
                                     )
                                 ) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("$stagedName won", fontWeight = FontWeight.Bold)
+                                    Text("$stagedName won", fontWeight = FontWeight.Bold, maxLines = 1)
                                 }
                             }
                         }
@@ -378,10 +390,15 @@ fun MatchupRow(
                     if (lastWinner == null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         TextButton(
-                            onClick = { showCoinFlip = true },
+                            onClick = { showTiebreaker = true },
                             modifier = Modifier.align(Alignment.CenterHorizontally)
                         ) {
-                            Text("🪙 Flip a coin to decide who breaks", color = ChalkBlue, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (matchup.isHeadToHead) "🪙 Flip a coin to decide who breaks"
+                                else "🎯 Spin to decide who breaks",
+                                color = ChalkBlue,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
 
@@ -392,13 +409,12 @@ fun MatchupRow(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        val label = when (lastWinner) {
-                            1 -> "Last winner: ${matchup.teamAName()}"
-                            2 -> "Last winner: ${matchup.teamBName()}"
-                            else -> "No games recorded yet"
-                        }
-                        Text(text = label, style = MaterialTheme.typography.bodySmall, color = OnSurfaceMuted)
-
+                        Text(
+                            text = if (lastWinner != null) "Last winner: ${matchup.teamName(lastWinner)}"
+                            else "No games recorded yet",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OnSurfaceMuted
+                        )
                         TextButton(onClick = onHistoryClick) {
                             Text("History (${matchup.history.size})", color = ChalkBlue)
                         }
@@ -406,13 +422,12 @@ fun MatchupRow(
                 }
             }
 
-            // Explosion overlay spans the *entire* card, not just the win-tile strip,
-            // so the burst has real room to breathe.
+            // Explosion overlay spans the entire card so the burst has room to breathe.
             BurstEffect(
                 trigger = burstTrigger,
-                color = if (burstSide == 2) colorB else colorA,
+                color = colors.getOrElse(burstSide - 1) { Brass },
                 originPx = burstOrigin,
-                originXFraction = if (burstSide == 1) 0.25f else 0.75f,
+                originXFraction = (burstSide - 0.5f) / matchup.teamCount,
                 originYFraction = 0.5f,
                 particleCount = 22,
                 maxRadiusDp = 110.dp,
@@ -421,13 +436,11 @@ fun MatchupRow(
         }
     }
 
-    if (showCoinFlip) {
-        CoinFlipDialog(
-            teamAName = matchup.teamAName(),
-            teamBName = matchup.teamBName(),
-            colorA = colorA,
-            colorB = colorB,
-            onDismiss = { showCoinFlip = false }
+    if (showTiebreaker) {
+        TiebreakerDialog(
+            teamNames = matchup.teams.map { it.displayName() },
+            colors = colors,
+            onDismiss = { showTiebreaker = false }
         )
     }
 
@@ -435,8 +448,8 @@ fun MatchupRow(
         MatchupSettingsDialog(
             matchup = matchup,
             knownPlayers = knownPlayers,
-            onSave = { teamA, teamB, solidsTeam ->
-                onUpdateTeams(teamA, teamB, solidsTeam)
+            onSave = { teams, solidsTeam ->
+                onUpdateTeams(teams, solidsTeam)
                 showSettings = false
             },
             onDelete = {
@@ -449,38 +462,25 @@ fun MatchupRow(
 }
 
 /**
- * A large, tappable "who won" tile. Tapping the left half always records a win
- * for Team A, tapping the right half always records a win for Team B — so the
- * same team can win repeatedly without the control needing to "toggle" first.
- *
- * - Tapping the side that's already winning makes the puck pulse and burst in place.
- * - Tapping the other side flings the puck across (with a physical bounce-and-settle),
- *   exploding on arrival.
- * - A soft gradient always sweeps toward whichever side is currently ahead.
- */
-/**
- * A large, two-sided "who won" control. Tapping a side *stages* that team as
- * the pending winner (highlighted with a dashed outline) but records nothing —
+ * A segmented "who won" control with one tappable segment per team. Tapping a
+ * segment *stages* that team (outlined in their color) but records nothing —
  * the caller shows a confirm button, and only on confirmation does the win
  * animation play and the result save. This guards against accidental taps.
- *
- * - Confirming the side that's already winning pulses and bursts in place.
- * - Confirming the other side flings the puck across with a springy bounce.
- * - A soft gradient always sweeps toward whichever side is currently ahead.
  */
 @Composable
 fun WinnerTile(
-    teamAName: String,
-    teamBName: String,
-    colorA: Color,
-    colorB: Color,
+    teamNames: List<String>,
+    colors: List<Color>,
     lastWinner: Int?,
     pendingWinner: Int?,
     confirmRequest: ConfirmRequest,
     onStageWinner: (side: Int, tapOffset: Offset, tileCoords: LayoutCoordinates?) -> Unit,
     onConfirmedBurst: (side: Int, tapOffset: Offset, tileCoords: LayoutCoordinates?) -> Unit
 ) {
-    val posFraction = remember { Animatable(if (lastWinner == 2) 1f else 0f) }
+    val count = teamNames.size.coerceAtLeast(2)
+    // Position is measured in segment indices (0-based) so the puck can slide
+    // between any pair of teams, not just two.
+    val posIndex = remember { Animatable(((lastWinner ?: 1) - 1).toFloat()) }
     val pulseScale = remember { Animatable(1f) }
     var tileCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
@@ -490,43 +490,50 @@ fun WinnerTile(
         label = "indicatorAlpha"
     )
 
-    // Runs the celebration only once a win has actually been confirmed.
     LaunchedEffect(confirmRequest.seq) {
         if (confirmRequest.seq == 0) return@LaunchedEffect
-        val side = confirmRequest.side
-        val wasAlreadyWinning = posFraction.value == (if (side == 1) 0f else 1f)
-        if (wasAlreadyWinning) {
+        val target = (confirmRequest.side - 1).toFloat()
+        val alreadyThere = abs(posIndex.value - target) < 0.01f
+        if (alreadyThere) {
             pulseScale.animateTo(1.18f, tween(130, easing = FastOutSlowInEasing))
-            onConfirmedBurst(side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
-            pulseScale.animateTo(
-                1f,
-                spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
-            )
+            onConfirmedBurst(confirmRequest.side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
+            pulseScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
         } else {
             launch {
                 delay(110)
-                onConfirmedBurst(side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
+                onConfirmedBurst(confirmRequest.side, confirmRequest.tapOffset, confirmRequest.tileCoords ?: tileCoords)
             }
-            posFraction.animateTo(
-                if (side == 1) 0f else 1f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioHighBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
+            posIndex.animateTo(
+                target,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioHighBouncy, stiffness = Spring.StiffnessLow)
             )
         }
+    }
+
+    val tileHeight = if (count <= 3) 72.dp else 88.dp
+    val nameSize = when {
+        count <= 2 -> 17.sp
+        count == 3 -> 15.sp
+        count == 4 -> 13.sp
+        else -> 11.sp
     }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .height(tileHeight)
             .onGloballyPositioned { tileCoords = it }
     ) {
-        val halfWidth = maxWidth / 2
-        val tint = lerp(colorA, colorB, posFraction.value)
-        val textOnA = contrastingTextColor(colorA)
-        val textOnB = contrastingTextColor(colorB)
+        val segWidth = maxWidth / count
+        // Blend toward whichever team the puck is currently nearest.
+        val lowIdx = posIndex.value.toInt().coerceIn(0, count - 1)
+        val highIdx = (lowIdx + 1).coerceAtMost(count - 1)
+        val tint = lerp(
+            colors.getOrElse(lowIdx) { Brass },
+            colors.getOrElse(highIdx) { Brass },
+            posIndex.value - lowIdx
+        )
+        val gradientCenter = ((posIndex.value + 0.5f) / count).coerceIn(0.06f, 0.94f)
 
         Box(
             modifier = Modifier
@@ -542,7 +549,7 @@ fun WinnerTile(
                     .background(
                         Brush.horizontalGradient(
                             0f to FeltGreenDark,
-                            posFraction.value.coerceIn(0.06f, 0.94f) to tint.copy(alpha = 0.6f),
+                            gradientCenter to tint.copy(alpha = 0.6f),
                             1f to FeltGreenDark
                         )
                     )
@@ -551,8 +558,8 @@ fun WinnerTile(
             // Solid puck marking exactly who is winning right now.
             Box(
                 modifier = Modifier
-                    .offset(x = halfWidth * posFraction.value)
-                    .width(halfWidth)
+                    .offset(x = segWidth * posIndex.value)
+                    .width(segWidth)
                     .fillMaxHeight()
                     .alpha(indicatorAlpha)
                     .graphicsLayer {
@@ -560,53 +567,50 @@ fun WinnerTile(
                         scaleY = pulseScale.value
                     }
                     .clip(RoundedCornerShape(20.dp))
-                    .background(if (posFraction.value > 0.5f) colorB else colorA)
+                    .background(colors.getOrElse(posIndex.value.roundToInt().coerceIn(0, count - 1)) { Brass })
             )
 
             Row(modifier = Modifier.fillMaxSize()) {
-                TeamHalf(
-                    name = teamAName,
-                    isWinner = lastWinner == 1,
-                    isPending = pendingWinner == 1,
-                    winnerTextColor = textOnA,
-                    pendingColor = colorA,
-                    modifier = Modifier.weight(1f),
-                    onTap = { offset -> onStageWinner(1, offset, tileCoords) }
-                )
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .fillMaxHeight(0.5f)
-                        .align(Alignment.CenterVertically)
-                        .background(OnSurfaceMuted.copy(alpha = 0.25f))
-                )
-                TeamHalf(
-                    name = teamBName,
-                    isWinner = lastWinner == 2,
-                    isPending = pendingWinner == 2,
-                    winnerTextColor = textOnB,
-                    pendingColor = colorB,
-                    modifier = Modifier.weight(1f),
-                    onTap = { offset ->
-                        // Offset is local to this half; shift into full-tile space.
-                        onStageWinner(2, Offset(offset.x + (tileCoords?.size?.width ?: 0) / 2f, offset.y), tileCoords)
+                teamNames.forEachIndexed { i, name ->
+                    if (i > 0) {
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .fillMaxHeight(0.5f)
+                                .align(Alignment.CenterVertically)
+                                .background(OnSurfaceMuted.copy(alpha = 0.25f))
+                        )
                     }
-                )
+                    TeamSegment(
+                        name = name,
+                        isWinner = lastWinner == i + 1,
+                        isPending = pendingWinner == i + 1,
+                        winnerTextColor = contrastingTextColor(colors.getOrElse(i) { Brass }),
+                        pendingColor = colors.getOrElse(i) { Brass },
+                        nameSize = nameSize,
+                        modifier = Modifier.weight(1f),
+                        onTap = { offset, segWidthPx ->
+                            // Shift the segment-local tap into full-tile space.
+                            onStageWinner(i + 1, Offset(offset.x + i * segWidthPx, offset.y), tileCoords)
+                        }
+                    )
+                }
             }
         }
     }
 }
 
-/** One tappable half of the winner tile. */
+/** One tappable segment of the winner tile. */
 @Composable
-fun TeamHalf(
+fun TeamSegment(
     name: String,
     isWinner: Boolean,
     isPending: Boolean,
     winnerTextColor: Color,
     pendingColor: Color,
+    nameSize: androidx.compose.ui.unit.TextUnit,
     modifier: Modifier = Modifier,
-    onTap: (Offset) -> Unit
+    onTap: (Offset, Float) -> Unit
 ) {
     val pendingBorderAlpha by animateFloatAsState(
         targetValue = if (isPending) 1f else 0f,
@@ -624,32 +628,26 @@ fun TeamHalf(
                 shape = RoundedCornerShape(16.dp)
             )
             .pointerInput(Unit) {
-                detectTapGestures { offset -> onTap(offset) }
+                detectTapGestures { offset -> onTap(offset, size.width.toFloat()) }
             },
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = name,
             fontWeight = if (isWinner || isPending) FontWeight.ExtraBold else FontWeight.SemiBold,
-            fontSize = 17.sp,
+            fontSize = nameSize,
             color = if (isWinner) winnerTextColor else CueCream,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 8.dp)
+            maxLines = 2,
+            modifier = Modifier.padding(horizontal = 4.dp)
         )
     }
 }
-
-/** Picks readable black or cream text depending on how light/dark [bg] is. */
-fun contrastingTextColor(bg: Color): Color =
-    if (bg.luminance() > 0.5f) Color(0xFF15231C) else CueCream
 
 /**
  * A radial particle burst used to punctuate a win. Increment [trigger] to fire
  * it again (even from the same spot) since the value itself, not just its
  * identity, needs to change to relaunch the effect.
- *
- * [originPx] is in this composable's own pixel coordinate space; when null the
- * burst falls back to the fractional origin.
  */
 @Composable
 fun BurstEffect(
@@ -690,177 +688,6 @@ fun BurstEffect(
 }
 
 /**
- * A pseudo-3D coin flip to decide who *breaks* (goes first). This is purely a
- * tiebreaker aid — it does NOT record a game result, so nothing is written to
- * the matchup's history. The result stays on screen until dismissed.
- */
-@Composable
-fun CoinFlipDialog(
-    teamAName: String,
-    teamBName: String,
-    colorA: Color,
-    colorB: Color,
-    onDismiss: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val angle = remember { Animatable(0f) }
-    val lift = remember { Animatable(0f) }
-    var isFlipping by remember { mutableStateOf(false) }
-    var resultTeam by remember { mutableStateOf<Int?>(null) }
-    var burstTrigger by remember { mutableStateOf(0) }
-
-    fun startFlip() {
-        if (isFlipping) return
-        isFlipping = true
-        resultTeam = null
-        scope.launch {
-            val outcome = if (Random.nextBoolean()) 1 else 2
-            val spins = Random.nextInt(6, 10)
-            // Land on the winner's face, measured from the coin's current angle
-            // so repeat flips always spin forward rather than snapping backward.
-            val current = angle.value
-            val base = current - (current % 360f)
-            val finalAngle = base + spins * 360f + if (outcome == 1) 0f else 180f
-
-            launch {
-                lift.animateTo(-46f, tween(280, easing = FastOutSlowInEasing))
-                lift.animateTo(
-                    0f,
-                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
-                )
-            }
-            angle.animateTo(finalAngle, tween(1500, easing = FastOutSlowInEasing))
-
-            resultTeam = outcome
-            isFlipping = false
-            burstTrigger++
-        }
-    }
-
-    Dialog(onDismissRequest = { if (!isFlipping) onDismiss() }) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = SurfaceVariant)
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(24.dp)
-                    .width(280.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("Who breaks?", color = CueCream, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "Just a tiebreaker — this isn't recorded as a game.",
-                    color = OnSurfaceMuted,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Box(
-                    modifier = Modifier.size(180.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(150.dp)
-                            .offset(y = lift.value.dp)
-                            .graphicsLayer {
-                                rotationY = angle.value
-                                cameraDistance = 16f * density
-                            }
-                    ) {
-                        val normalized = ((angle.value % 360f) + 360f) % 360f
-                        val showFront = normalized < 90f || normalized > 270f
-                        if (showFront) {
-                            CoinFace(label = teamAName, color = colorA)
-                        } else {
-                            Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
-                                CoinFace(label = teamBName, color = colorB)
-                            }
-                        }
-                    }
-
-                    BurstEffect(
-                        trigger = burstTrigger,
-                        color = if (resultTeam == 2) colorB else colorA,
-                        modifier = Modifier.matchParentSize(),
-                        particleCount = 18,
-                        maxRadiusDp = 90.dp
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                when {
-                    isFlipping -> Text("Flipping…", color = OnSurfaceMuted)
-                    resultTeam != null -> {
-                        val winnerName = if (resultTeam == 1) teamAName else teamBName
-                        val winnerColor = if (resultTeam == 1) colorA else colorB
-                        Text(
-                            "$winnerName breaks!",
-                            color = winnerColor,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 18.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { startFlip() }) {
-                                Text("Flip again", color = ChalkBlue)
-                            }
-                            Button(
-                                onClick = onDismiss,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Brass,
-                                    contentColor = Color(0xFF241A00)
-                                )
-                            ) {
-                                Text("Done", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                    else -> Button(
-                        onClick = { startFlip() },
-                        colors = ButtonDefaults.buttonColors(containerColor = Brass, contentColor = Color(0xFF241A00))
-                    ) {
-                        Text("Flip", fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                if (!isFlipping && resultTeam == null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
-                }
-            }
-        }
-    }
-}
-
-/** One face of the coin: a metallic-looking circle with a team's name centered on it. */
-@Composable
-fun CoinFace(label: String, color: Color) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .clip(CircleShape)
-            .background(Brush.radialGradient(listOf(BrassLight, color)))
-            .padding(14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = Color(0xFF1A1200),
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 15.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 3
-        )
-    }
-}
-
-/**
  * Inline, tappable solids/stripes assignment shown directly on the matchup tile.
  * Tap a team to give them solids (the other side automatically gets stripes);
  * tap the team that already has solids to clear the assignment entirely.
@@ -880,8 +707,6 @@ fun BallAssignmentRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         BallChip(
-            teamName = teamAName,
-            // Team A has solids when solidsTeam == 1, stripes when == 2.
             striped = solidsTeam == 2,
             assigned = solidsTeam != null,
             accent = colorA,
@@ -889,7 +714,6 @@ fun BallAssignmentRow(
             onClick = { onAssign(if (solidsTeam == 1) null else 1) }
         )
         BallChip(
-            teamName = teamBName,
             striped = solidsTeam == 1,
             assigned = solidsTeam != null,
             accent = colorB,
@@ -902,7 +726,6 @@ fun BallAssignmentRow(
 /** A tappable chip showing a team's ball group (or an invitation to set one). */
 @Composable
 fun BallChip(
-    teamName: String,
     striped: Boolean,
     assigned: Boolean,
     accent: Color,
@@ -912,9 +735,7 @@ fun BallChip(
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (assigned) accent.copy(alpha = 0.16f) else Color.Transparent
-            )
+            .background(if (assigned) accent.copy(alpha = 0.16f) else Color.Transparent)
             .border(
                 width = 1.dp,
                 color = if (assigned) accent.copy(alpha = 0.55f) else OnSurfaceMuted.copy(alpha = 0.3f),
@@ -944,14 +765,9 @@ fun BallGlyph(striped: Boolean, dimmed: Boolean, accent: Color) {
         val r = size.minDimension / 2f
         val c = Offset(size.width / 2f, size.height / 2f)
         if (striped) {
-            // White ball with a colored band across the middle.
             drawCircle(color = CueCream, radius = r, center = c)
             clipPath(Path().apply { addOval(Rect(center = c, radius = r)) }) {
-                drawRect(
-                    color = ballColor,
-                    topLeft = Offset(0f, c.y - r * 0.5f),
-                    size = Size(size.width, r)
-                )
+                drawRect(color = ballColor, topLeft = Offset(0f, c.y - r * 0.5f), size = Size(size.width, r))
             }
         } else {
             drawCircle(color = ballColor, radius = r, center = c)
@@ -960,19 +776,325 @@ fun BallGlyph(striped: Boolean, dimmed: Boolean, accent: Color) {
     }
 }
 
-/** Preset palette offered when picking a team color. */
-val TeamColorChoices = listOf(
-    Color(0xFF1C5A3D), // felt green
-    Color(0xFFC9A24B), // brass
-    Color(0xFF4E7C8C), // chalk blue
-    Color(0xFFB3452F), // clay red
-    Color(0xFF6C4E9C), // purple
-    Color(0xFFCF7A2E), // orange
-    Color(0xFF2F7FB3), // bright blue
-    Color(0xFFAE3B62), // magenta
-    Color(0xFF3F8F55), // leaf green
-    Color(0xFF8C8C8C)  // grey
-)
+/**
+ * Picks who breaks. Two teams get the coin flip; three or more get a spinning
+ * wheel. Either way this is only a tiebreaker aid — nothing is recorded to the
+ * matchup's history, and the result stays up until dismissed.
+ */
+@Composable
+fun TiebreakerDialog(
+    teamNames: List<String>,
+    colors: List<Color>,
+    onDismiss: () -> Unit
+) {
+    if (teamNames.size == 2) {
+        CoinFlipDialog(
+            teamAName = teamNames[0],
+            teamBName = teamNames[1],
+            colorA = colors.getOrElse(0) { FeltGreenLight },
+            colorB = colors.getOrElse(1) { Brass },
+            onDismiss = onDismiss
+        )
+    } else {
+        WheelSpinDialog(teamNames = teamNames, colors = colors, onDismiss = onDismiss)
+    }
+}
+
+/** A pseudo-3D coin flip for head-to-head matchups. */
+@Composable
+fun CoinFlipDialog(
+    teamAName: String,
+    teamBName: String,
+    colorA: Color,
+    colorB: Color,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val angle = remember { Animatable(0f) }
+    val lift = remember { Animatable(0f) }
+    var isFlipping by remember { mutableStateOf(false) }
+    var resultTeam by remember { mutableStateOf<Int?>(null) }
+    var burstTrigger by remember { mutableStateOf(0) }
+
+    fun startFlip() {
+        if (isFlipping) return
+        isFlipping = true
+        resultTeam = null
+        scope.launch {
+            val outcome = if (Random.nextBoolean()) 1 else 2
+            val spins = Random.nextInt(6, 10)
+            val current = angle.value
+            val base = current - (current % 360f)
+            val finalAngle = base + spins * 360f + if (outcome == 1) 0f else 180f
+
+            launch {
+                lift.animateTo(-46f, tween(280, easing = FastOutSlowInEasing))
+                lift.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
+            }
+            angle.animateTo(finalAngle, tween(1500, easing = FastOutSlowInEasing))
+
+            resultTeam = outcome
+            isFlipping = false
+            burstTrigger++
+        }
+    }
+
+    TiebreakerShell(
+        title = "Who breaks?",
+        isBusy = isFlipping,
+        busyLabel = "Flipping…",
+        resultLabel = resultTeam?.let { "${if (it == 1) teamAName else teamBName} breaks!" },
+        resultColor = if (resultTeam == 2) colorB else colorA,
+        actionLabel = "Flip",
+        againLabel = "Flip again",
+        onAction = { startFlip() },
+        onDismiss = onDismiss
+    ) {
+        Box(modifier = Modifier.size(180.dp), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(150.dp)
+                    .offset(y = lift.value.dp)
+                    .graphicsLayer {
+                        rotationY = angle.value
+                        cameraDistance = 16f * density
+                    }
+            ) {
+                val normalized = ((angle.value % 360f) + 360f) % 360f
+                val showFront = normalized < 90f || normalized > 270f
+                if (showFront) {
+                    CoinFace(label = teamAName, color = colorA)
+                } else {
+                    Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
+                        CoinFace(label = teamBName, color = colorB)
+                    }
+                }
+            }
+            BurstEffect(
+                trigger = burstTrigger,
+                color = if (resultTeam == 2) colorB else colorA,
+                modifier = Modifier.matchParentSize(),
+                particleCount = 18,
+                maxRadiusDp = 90.dp
+            )
+        }
+    }
+}
+
+/** One face of the coin: a metallic-looking circle with a team's name centered on it. */
+@Composable
+fun CoinFace(label: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(CircleShape)
+            .background(Brush.radialGradient(listOf(BrassLight, color)))
+            .padding(14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFF1A1200),
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 3
+        )
+    }
+}
+
+/** A spinning wheel tiebreaker for matchups with three or more teams. */
+@Composable
+fun WheelSpinDialog(
+    teamNames: List<String>,
+    colors: List<Color>,
+    onDismiss: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val angle = remember { Animatable(0f) }
+    var isSpinning by remember { mutableStateOf(false) }
+    var resultIndex by remember { mutableStateOf<Int?>(null) }
+    var burstTrigger by remember { mutableStateOf(0) }
+    val textMeasurer = rememberTextMeasurer()
+    val sweep = 360f / teamNames.size
+
+    fun startSpin() {
+        if (isSpinning) return
+        isSpinning = true
+        resultIndex = null
+        scope.launch {
+            val outcome = Random.nextInt(teamNames.size)
+            val spins = Random.nextInt(5, 9)
+            // Sector i is centered at (-90 + (i+0.5)*sweep) before rotation; to land
+            // it under the pointer at the top we rotate by the negative of that.
+            val landing = -((outcome + 0.5f) * sweep)
+            val current = angle.value
+            val base = current - (current % 360f)
+            angle.animateTo(base + spins * 360f + landing, tween(2600, easing = FastOutSlowInEasing))
+            resultIndex = outcome
+            isSpinning = false
+            burstTrigger++
+        }
+    }
+
+    TiebreakerShell(
+        title = "Who breaks?",
+        isBusy = isSpinning,
+        busyLabel = "Spinning…",
+        resultLabel = resultIndex?.let { "${teamNames[it]} breaks!" },
+        resultColor = resultIndex?.let { colors.getOrElse(it) { Brass } } ?: Brass,
+        actionLabel = "Spin",
+        againLabel = "Spin again",
+        onAction = { startSpin() },
+        onDismiss = onDismiss
+    ) {
+        Box(modifier = Modifier.size(220.dp), contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(200.dp)) {
+                val radius = size.minDimension / 2f
+                val center = Offset(size.width / 2f, size.height / 2f)
+
+                rotate(degrees = angle.value, pivot = center) {
+                    teamNames.indices.forEach { i ->
+                        drawArc(
+                            color = colors.getOrElse(i) { Brass },
+                            startAngle = -90f + i * sweep,
+                            sweepAngle = sweep,
+                            useCenter = true,
+                            topLeft = Offset(center.x - radius, center.y - radius),
+                            size = Size(radius * 2, radius * 2)
+                        )
+                        drawArc(
+                            color = FeltGreenDark.copy(alpha = 0.55f),
+                            startAngle = -90f + i * sweep,
+                            sweepAngle = sweep,
+                            useCenter = true,
+                            topLeft = Offset(center.x - radius, center.y - radius),
+                            size = Size(radius * 2, radius * 2),
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                    }
+                }
+
+                // Labels are drawn outside the rotation so they stay upright,
+                // positioned using the wheel's current angle.
+                teamNames.forEachIndexed { i, name ->
+                    val deg = -90f + (i + 0.5f) * sweep + angle.value
+                    val rad = deg * PI.toFloat() / 180f
+                    val lr = radius * 0.6f
+                    val laid = textMeasurer.measure(
+                        text = name,
+                        style = TextStyle(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = contrastingTextColor(colors.getOrElse(i) { Brass })
+                        )
+                    )
+                    drawText(
+                        textLayoutResult = laid,
+                        topLeft = Offset(
+                            center.x + cos(rad) * lr - laid.size.width / 2f,
+                            center.y + sin(rad) * lr - laid.size.height / 2f
+                        )
+                    )
+                }
+
+                // Hub and pointer.
+                drawCircle(color = SurfaceVariant, radius = radius * 0.16f, center = center)
+                drawCircle(color = CueCream, radius = radius * 0.16f, center = center, style = Stroke(width = 2.dp.toPx()))
+                val tip = Offset(center.x, center.y - radius - 2.dp.toPx())
+                drawPath(
+                    path = Path().apply {
+                        moveTo(tip.x, tip.y + 16.dp.toPx())
+                        lineTo(tip.x - 9.dp.toPx(), tip.y - 4.dp.toPx())
+                        lineTo(tip.x + 9.dp.toPx(), tip.y - 4.dp.toPx())
+                        close()
+                    },
+                    color = CueCream
+                )
+            }
+            BurstEffect(
+                trigger = burstTrigger,
+                color = resultIndex?.let { colors.getOrElse(it) { Brass } } ?: Brass,
+                modifier = Modifier.matchParentSize(),
+                particleCount = 20,
+                maxRadiusDp = 110.dp
+            )
+        }
+    }
+}
+
+/** Shared chrome for both tiebreaker dialogs. */
+@Composable
+fun TiebreakerShell(
+    title: String,
+    isBusy: Boolean,
+    busyLabel: String,
+    resultLabel: String?,
+    resultColor: Color,
+    actionLabel: String,
+    againLabel: String,
+    onAction: () -> Unit,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Dialog(onDismissRequest = { if (!isBusy) onDismiss() }) {
+        Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = SurfaceVariant)) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .width(300.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(title, color = CueCream, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Just a tiebreaker — this isn't recorded as a game.",
+                    color = OnSurfaceMuted,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+
+                content()
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                when {
+                    isBusy -> Text(busyLabel, color = OnSurfaceMuted)
+                    resultLabel != null -> {
+                        Text(
+                            resultLabel,
+                            color = resultColor,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 18.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = onAction) { Text(againLabel, color = ChalkBlue) }
+                            Button(
+                                onClick = onDismiss,
+                                colors = ButtonDefaults.buttonColors(containerColor = Brass, contentColor = Color(0xFF241A00))
+                            ) {
+                                Text("Done", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    else -> {
+                        Button(
+                            onClick = onAction,
+                            colors = ButtonDefaults.buttonColors(containerColor = Brass, contentColor = Color(0xFF241A00))
+                        ) {
+                            Text(actionLabel, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /** A row of tappable color swatches. */
 @Composable
@@ -1001,25 +1123,167 @@ fun ColorPickerRow(selected: Color, onSelect: (Color) -> Unit) {
     }
 }
 
+/** Editable working copy of a team while a dialog is open. */
+class TeamDraft(
+    initialName: String = "",
+    initialPlayers: List<String> = emptyList(),
+    initialColor: Color
+) {
+    var name by mutableStateOf(initialName)
+    var color by mutableStateOf(initialColor)
+    val players = mutableStateListOf<String>().apply { addAll(initialPlayers) }
+
+    fun toTeam(): Team = Team(
+        name = name.trim().ifBlank { null },
+        players = players.map { it.trim() }.filter { it.isNotEmpty() },
+        colorArgb = color.toArgb()
+    )
+
+    val isValid: Boolean
+        get() = name.isNotBlank() || players.any { it.isNotBlank() }
+
+    fun resolvedName(fallback: String): String = when {
+        name.isNotBlank() -> name.trim()
+        players.any { it.isNotBlank() } -> players.filter { it.isNotBlank() }.joinToString(" & ")
+        else -> fallback
+    }
+}
+
 /**
- * Settings for an existing matchup: rename teams, add/remove players, pick each
- * team's color, assign solids/stripes, or delete the matchup entirely.
+ * Editor for the full list of teams in a matchup: add or remove teams, rename
+ * them, manage their players, and pick their colors.
+ */
+@Composable
+fun TeamDraftEditor(drafts: SnapshotStateList<TeamDraft>, knownPlayers: List<String>) {
+    Column {
+        drafts.forEachIndexed { index, draft ->
+            if (index > 0) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("vs", color = OnSurfaceMuted, modifier = Modifier.align(Alignment.CenterHorizontally))
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(draft.color)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Team ${index + 1}", color = Brass, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+                if (drafts.size > 2) {
+                    TextButton(onClick = { drafts.removeAt(index) }) {
+                        Text("Remove", color = OnSurfaceMuted, fontSize = 12.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            TeamInputSection(
+                teamName = draft.name,
+                onTeamNameChange = { draft.name = it },
+                players = draft.players,
+                knownPlayers = knownPlayers
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Color", color = OnSurfaceMuted, fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            ColorPickerRow(selected = draft.color, onSelect = { draft.color = it })
+        }
+
+        if (drafts.size < MAX_TEAMS) {
+            Spacer(modifier = Modifier.height(14.dp))
+            OutlinedButton(
+                onClick = {
+                    drafts.add(TeamDraft(initialColor = defaultTeamColor(drafts.size)))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp), tint = ChalkBlue)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Add team (${drafts.size} of $MAX_TEAMS)", color = ChalkBlue)
+            }
+        }
+    }
+}
+
+@Composable
+fun AddMatchupDialog(
+    knownPlayers: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<Team>) -> Unit
+) {
+    val drafts = remember {
+        mutableStateListOf(
+            TeamDraft(initialColor = defaultTeamColor(0)),
+            TeamDraft(initialColor = defaultTeamColor(1))
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceVariant,
+        titleContentColor = CueCream,
+        textContentColor = CueCream,
+        title = { Text("New matchup") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                TeamDraftEditor(drafts = drafts, knownPlayers = knownPlayers)
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    "Add a third or fourth team for free-for-all games. Solids/stripes is available on two-team matchups.",
+                    color = OnSurfaceMuted,
+                    fontSize = 11.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (drafts.size >= 2 && drafts.all { it.isValid }) {
+                        onConfirm(drafts.map { it.toTeam() })
+                    }
+                }
+            ) { Text("Add", color = Brass, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
+        }
+    )
+}
+
+/**
+ * Settings for an existing matchup: add/remove teams, rename them, manage
+ * players, pick colors, or delete the matchup entirely.
  */
 @Composable
 fun MatchupSettingsDialog(
     matchup: Matchup,
     knownPlayers: List<String>,
-    onSave: (Team, Team, Int?) -> Unit,
+    onSave: (List<Team>, Int?) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var nameA by remember { mutableStateOf(matchup.teamA.name ?: "") }
-    var nameB by remember { mutableStateOf(matchup.teamB.name ?: "") }
-    val playersA = remember { mutableStateListOf<String>().apply { addAll(matchup.teamA.players) } }
-    val playersB = remember { mutableStateListOf<String>().apply { addAll(matchup.teamB.players) } }
-    var colorA by remember { mutableStateOf(matchup.teamA.color(FeltGreenLight)) }
-    var colorB by remember { mutableStateOf(matchup.teamB.color(Brass)) }
-    var solidsTeam by remember { mutableStateOf(matchup.solidsTeam) }
+    val drafts = remember {
+        mutableStateListOf<TeamDraft>().apply {
+            matchup.teams.forEachIndexed { i, t ->
+                add(TeamDraft(initialName = t.name ?: "", initialPlayers = t.players, initialColor = t.color(defaultTeamColor(i))))
+            }
+        }
+    }
     var confirmDelete by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -1031,36 +1295,19 @@ fun MatchupSettingsDialog(
         text = {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 440.dp)
+                    .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                TeamInputSection(
-                    label = "Team A",
-                    teamName = nameA,
-                    onTeamNameChange = { nameA = it },
-                    players = playersA,
-                    knownPlayers = knownPlayers
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Team A color", color = OnSurfaceMuted, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                ColorPickerRow(selected = colorA, onSelect = { colorA = it })
+                TeamDraftEditor(drafts = drafts, knownPlayers = knownPlayers)
 
-                Spacer(modifier = Modifier.height(18.dp))
-                HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
-                Spacer(modifier = Modifier.height(18.dp))
-
-                TeamInputSection(
-                    label = "Team B",
-                    teamName = nameB,
-                    onTeamNameChange = { nameB = it },
-                    players = playersB,
-                    knownPlayers = knownPlayers
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Team B color", color = OnSurfaceMuted, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                ColorPickerRow(selected = colorB, onSelect = { colorB = it })
+                if (matchup.history.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "Removing a team also clears that team's recorded results.",
+                        color = OnSurfaceMuted,
+                        fontSize = 11.sp
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(18.dp))
                 HorizontalDivider(color = OnSurfaceMuted.copy(alpha = 0.2f))
@@ -1085,18 +1332,14 @@ fun MatchupSettingsDialog(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { confirmDelete = false }) {
-                            Text("Keep", color = OnSurfaceMuted)
-                        }
+                        TextButton(onClick = { confirmDelete = false }) { Text("Keep", color = OnSurfaceMuted) }
                         Button(
                             onClick = onDelete,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error,
                                 contentColor = Color.White
                             )
-                        ) {
-                            Text("Delete", fontWeight = FontWeight.Bold)
-                        }
+                        ) { Text("Delete", fontWeight = FontWeight.Bold) }
                     }
                 }
             }
@@ -1104,20 +1347,10 @@ fun MatchupSettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val teamA = Team(
-                        name = nameA.trim().ifBlank { null },
-                        players = playersA.map { it.trim() }.filter { it.isNotEmpty() },
-                        colorArgb = colorA.toArgb()
-                    )
-                    val teamB = Team(
-                        name = nameB.trim().ifBlank { null },
-                        players = playersB.map { it.trim() }.filter { it.isNotEmpty() },
-                        colorArgb = colorB.toArgb()
-                    )
-                    val validA = teamA.name != null || teamA.players.isNotEmpty()
-                    val validB = teamB.name != null || teamB.players.isNotEmpty()
-                    if (validA && validB) {
-                        onSave(teamA, teamB, solidsTeam)
+                    if (drafts.size >= 2 && drafts.all { it.isValid }) {
+                        // Keep the ball assignment only if this is still head-to-head.
+                        val solids = if (drafts.size == 2) matchup.solidsTeam else null
+                        onSave(drafts.map { it.toTeam() }, solids)
                     }
                 }
             ) { Text("Save", color = Brass, fontWeight = FontWeight.Bold) }
@@ -1128,120 +1361,22 @@ fun MatchupSettingsDialog(
     )
 }
 
-@Composable
-fun AddMatchupDialog(
-    knownPlayers: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (Team, Team) -> Unit
-) {
-    var teamAName by remember { mutableStateOf("") }
-    var teamBName by remember { mutableStateOf("") }
-    val teamAPlayers = remember { mutableStateListOf<String>() }
-    val teamBPlayers = remember { mutableStateListOf<String>() }
-    var colorA by remember { mutableStateOf(FeltGreenLight) }
-    var colorB by remember { mutableStateOf(Brass) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = SurfaceVariant,
-        titleContentColor = CueCream,
-        textContentColor = CueCream,
-        title = { Text("New matchup") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                TeamInputSection(
-                    label = "Team A",
-                    teamName = teamAName,
-                    onTeamNameChange = { teamAName = it },
-                    players = teamAPlayers,
-                    knownPlayers = knownPlayers
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Team A color", color = OnSurfaceMuted, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                ColorPickerRow(selected = colorA, onSelect = { colorA = it })
-
-                Spacer(modifier = Modifier.height(14.dp))
-                Text("vs", color = OnSurfaceMuted, modifier = Modifier.align(Alignment.CenterHorizontally))
-                Spacer(modifier = Modifier.height(14.dp))
-
-                TeamInputSection(
-                    label = "Team B",
-                    teamName = teamBName,
-                    onTeamNameChange = { teamBName = it },
-                    players = teamBPlayers,
-                    knownPlayers = knownPlayers
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Team B color", color = OnSurfaceMuted, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                ColorPickerRow(selected = colorB, onSelect = { colorB = it })
-
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    "Solids/stripes can be set later from the matchup's settings gear.",
-                    color = OnSurfaceMuted,
-                    fontSize = 11.sp
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val teamA = Team(
-                        name = teamAName.trim().ifBlank { null },
-                        players = teamAPlayers.map { it.trim() }.filter { it.isNotEmpty() },
-                        colorArgb = colorA.toArgb()
-                    )
-                    val teamB = Team(
-                        name = teamBName.trim().ifBlank { null },
-                        players = teamBPlayers.map { it.trim() }.filter { it.isNotEmpty() },
-                        colorArgb = colorB.toArgb()
-                    )
-                    val validA = teamA.name != null || teamA.players.isNotEmpty()
-                    val validB = teamB.name != null || teamB.players.isNotEmpty()
-                    if (validA && validB) {
-                        onConfirm(teamA, teamB)
-                    }
-                }
-            ) { Text("Add", color = Brass, fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceMuted) }
-        }
-    )
-}
-
-/**
- * Input block for one side of a matchup: an optional team name, plus zero or
- * more player name fields that can be added one at a time.
- */
+/** Optional team name plus zero or more player name fields. */
 @Composable
 fun TeamInputSection(
-    label: String,
     teamName: String,
     onTeamNameChange: (String) -> Unit,
     players: SnapshotStateList<String>,
     knownPlayers: List<String>
 ) {
     Column {
-        Text(label, color = Brass, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-        Spacer(modifier = Modifier.height(6.dp))
-
         OutlinedTextField(
             value = teamName,
             onValueChange = onTeamNameChange,
             label = { Text("Team name (optional)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Brass,
-                cursorColor = Brass
-            )
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brass, cursorColor = Brass)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -1258,12 +1393,7 @@ fun TeamInputSection(
         }
 
         TextButton(onClick = { players.add("") }) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = null,
-                tint = ChalkBlue,
-                modifier = Modifier.size(18.dp)
-            )
+            Icon(Icons.Default.Add, contentDescription = null, tint = ChalkBlue, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(4.dp))
             Text("Add player", color = ChalkBlue)
         }
@@ -1287,10 +1417,7 @@ fun PlayerInputRow(
                 label = { Text("Player name") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Brass,
-                    cursorColor = Brass
-                )
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Brass, cursorColor = Brass)
             )
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.Close, contentDescription = "Remove player", tint = OnSurfaceMuted)
@@ -1298,15 +1425,12 @@ fun PlayerInputRow(
         }
 
         val suggestions = remember(value, knownPlayers, alreadyChosen) {
-            if (value.isBlank()) {
-                emptyList()
-            } else {
-                knownPlayers.filter { candidate ->
-                    candidate.contains(value, ignoreCase = true) &&
-                        !candidate.equals(value, ignoreCase = true) &&
-                        alreadyChosen.none { it.equals(candidate, ignoreCase = true) }
-                }.take(5)
-            }
+            if (value.isBlank()) emptyList()
+            else knownPlayers.filter { candidate ->
+                candidate.contains(value, ignoreCase = true) &&
+                    !candidate.equals(value, ignoreCase = true) &&
+                    alreadyChosen.none { it.equals(candidate, ignoreCase = true) }
+            }.take(5)
         }
 
         if (suggestions.isNotEmpty()) {
@@ -1333,10 +1457,70 @@ fun PlayerInputRow(
     }
 }
 
+/**
+ * Cumulative wins per team over the course of the matchup — one line per team,
+ * in that team's color. Works for any number of teams.
+ */
+@Composable
+fun CumulativeWinsChart(
+    history: List<GameResult>,
+    teamCount: Int,
+    colors: List<Color>,
+    modifier: Modifier = Modifier
+) {
+    val series = remember(history, teamCount) {
+        val running = IntArray(teamCount)
+        val out = List(teamCount) { mutableListOf(0) }
+        history.forEach { r ->
+            if (r.winnerTeam in 1..teamCount) running[r.winnerTeam - 1]++
+            for (t in 0 until teamCount) out[t].add(running[t])
+        }
+        out.map { it.toList() }
+    }
+    val maxWins = max(series.maxOfOrNull { s -> s.maxOrNull() ?: 0 } ?: 1, 1)
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val pad = 8f
+        val usableH = h - pad * 2
+        val pointCount = series.firstOrNull()?.size ?: 0
+        if (pointCount < 2) return@Canvas
+        val stepX = w / (pointCount - 1)
+
+        drawLine(
+            color = OnSurfaceMuted.copy(alpha = 0.25f),
+            start = Offset(0f, h - pad),
+            end = Offset(w, h - pad),
+            strokeWidth = 1.dp.toPx()
+        )
+
+        series.forEachIndexed { teamIdx, values ->
+            val path = Path()
+            values.forEachIndexed { i, v ->
+                val x = i * stepX
+                val y = h - pad - (v.toFloat() / maxWins) * usableH
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(
+                path = path,
+                color = colors.getOrElse(teamIdx) { Brass },
+                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+            val lastX = (values.size - 1) * stepX
+            val lastY = h - pad - (values.last().toFloat() / maxWins) * usableH
+            drawCircle(
+                color = colors.getOrElse(teamIdx) { Brass },
+                radius = 4.dp.toPx(),
+                center = Offset(lastX, lastY)
+            )
+        }
+    }
+}
 
 /**
- * Line chart of running win-differential (Team A wins minus Team B wins) over
- * the course of the matchup's history. Rises when A is on top, dips when B is.
+ * Head-to-head momentum: the running win differential (team 1 minus team 2).
+ * Rises when the first team is on top, dips when the second is.
  */
 @Composable
 fun MomentumLineChart(
@@ -1350,8 +1534,6 @@ fun MomentumLineChart(
         history.map { r -> running += if (r.winnerTeam == 1) 1 else -1; running }
     }
     val maxAbs = (diffs.maxOfOrNull { abs(it) } ?: 1).coerceAtLeast(1)
-    val lineColor = Brass
-    val zeroLineColor = OnSurfaceMuted
 
     Canvas(modifier = modifier) {
         val w = size.width
@@ -1361,9 +1543,8 @@ fun MomentumLineChart(
         val midY = h / 2f
         val stepX = if (diffs.size > 1) w / (diffs.size - 1) else w
 
-        // Zero line (parity between teams)
         drawLine(
-            color = zeroLineColor.copy(alpha = 0.25f),
+            color = OnSurfaceMuted.copy(alpha = 0.25f),
             start = Offset(0f, midY),
             end = Offset(w, midY),
             strokeWidth = 1.dp.toPx()
@@ -1374,20 +1555,17 @@ fun MomentumLineChart(
         }
 
         val path = Path().apply {
-            points.forEachIndexed { i, p ->
-                if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
-            }
+            points.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
         }
         drawPath(
             path = path,
-            color = lineColor,
+            color = Brass,
             style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
 
         points.forEachIndexed { i, p ->
-            val isA = history[i].winnerTeam == 1
             drawCircle(
-                color = if (isA) colorA else colorB,
+                color = if (history[i].winnerTeam == 1) colorA else colorB,
                 radius = 4.5.dp.toPx(),
                 center = p
             )
@@ -1397,108 +1575,124 @@ fun MomentumLineChart(
 
 @Composable
 fun HistoryDialog(matchup: Matchup, onDismiss: () -> Unit) {
-    val colorA = matchup.teamA.color(FeltGreenLight)
-    val colorB = matchup.teamB.color(Brass)
     val formatter = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
-    val winsA = matchup.winsFor(1)
-    val winsB = matchup.winsFor(2)
-    val total = max(winsA + winsB, 1)
+    val colors = matchup.teamColors()
+    val wins = (1..matchup.teamCount).map { matchup.winsFor(it) }
+    val total = max(wins.sum(), 1)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = SurfaceVariant,
         titleContentColor = CueCream,
         textContentColor = CueCream,
-        title = { Text("${matchup.teamAName()} vs ${matchup.teamBName()}") },
+        title = { Text(matchup.teams.joinToString(" vs ") { it.displayName() }, fontSize = 17.sp) },
         text = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 470.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 if (matchup.history.isEmpty()) {
                     Text("No games recorded yet.", color = OnSurfaceMuted)
                 } else {
-                    Text(
-                        "${matchup.teamAName()}  $winsA — $winsB  ${matchup.teamBName()}",
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    // Per-team score summary.
+                    matchup.teams.forEachIndexed { i, team ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(colors[i])
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(team.displayName(), color = CueCream, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Text(
+                                "${wins[i]}  ·  ${((wins[i].toFloat() / total) * 100).toInt()}%",
+                                color = colors[i],
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
-                    // Win-ratio bar
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Weighted win-share bar.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(14.dp)
                             .clip(RoundedCornerShape(7.dp))
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(winsA.toFloat().coerceAtLeast(0.001f))
-                                .fillMaxHeight()
-                                .background(colorA)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .weight(winsB.toFloat().coerceAtLeast(0.001f))
-                                .fillMaxHeight()
-                                .background(colorB)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(
-                            "${((winsA.toFloat() / total) * 100).toInt()}%",
-                            color = colorA,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            "${((winsB.toFloat() / total) * 100).toInt()}%",
-                            color = colorB,
-                            fontSize = 12.sp
-                        )
+                        wins.forEachIndexed { i, w ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(w.toFloat().coerceAtLeast(0.001f))
+                                    .fillMaxHeight()
+                                    .background(colors[i])
+                            )
+                        }
                     }
 
                     if (matchup.history.size >= 2) {
                         Spacer(modifier = Modifier.height(18.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Momentum", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
-                            Row {
-                                Text(matchup.teamAName(), color = colorA, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text("  ·  ", color = OnSurfaceMuted, fontSize = 11.sp)
-                                Text(matchup.teamBName(), color = colorB, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        MomentumLineChart(
-                            history = matchup.history,
-                            colorA = colorA,
-                            colorB = colorB,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(90.dp)
+                        Text(
+                            if (matchup.isHeadToHead) "Momentum" else "Cumulative wins",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OnSurfaceMuted
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        if (matchup.isHeadToHead) {
+                            MomentumLineChart(
+                                history = matchup.history,
+                                colorA = colors[0],
+                                colorB = colors[1],
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(90.dp)
+                            )
+                        } else {
+                            CumulativeWinsChart(
+                                history = matchup.history,
+                                teamCount = matchup.teamCount,
+                                colors = colors,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(110.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("Recent form", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Form strip: last up to 10 results, oldest -> newest
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        matchup.history.takeLast(10).forEach { result ->
-                            val isA = result.winnerTeam == 1
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        matchup.history.takeLast(12).forEach { result ->
+                            val c = colors.getOrElse(result.winnerTeam - 1) { Brass }
+                            val initial = matchup.teamName(result.winnerTeam).trim().firstOrNull()?.uppercase() ?: "?"
                             Box(
                                 modifier = Modifier
                                     .size(26.dp)
                                     .clip(CircleShape)
-                                    .background(if (isA) colorA else colorB),
+                                    .background(c),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = if (isA) "A" else "B",
+                                    text = initial,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = contrastingTextColor(if (isA) colorA else colorB)
+                                    color = contrastingTextColor(c)
                                 )
                             }
                         }
@@ -1508,29 +1702,26 @@ fun HistoryDialog(matchup: Matchup, onDismiss: () -> Unit) {
                     Text("Full history", style = MaterialTheme.typography.labelMedium, color = OnSurfaceMuted)
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
-                        items(matchup.history.reversed()) { result ->
-                            val winnerName = if (result.winnerTeam == 1) matchup.teamAName() else matchup.teamBName()
-                            val dotColor = if (result.winnerTeam == 1) colorA else colorB
-                            Row(
+                    matchup.history.reversed().forEach { result ->
+                        val c = colors.getOrElse(result.winnerTeam - 1) { Brass }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(dotColor)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "${formatter.format(Date(result.timestamp))} — $winnerName won",
-                                    fontSize = 13.sp,
-                                    color = CueCream
-                                )
-                            }
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(c)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "${formatter.format(Date(result.timestamp))} — ${matchup.teamName(result.winnerTeam)} won",
+                                fontSize = 13.sp,
+                                color = CueCream
+                            )
                         }
                     }
                 }
