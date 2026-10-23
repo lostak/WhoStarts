@@ -1,6 +1,9 @@
 package com.example.pooltracker
 
 import android.content.Context
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -67,12 +70,31 @@ class StoreScreenshots {
 
     private fun shoot(name: String, seed: List<Matchup>, action: () -> Unit = {}) {
         Storage.save(context, seed)
-        ActivityScenario.launch(MainActivity::class.java).use {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            // Hide the nav bar / tablet taskbar so only the app and status bar show.
+            scenario.onActivity { activity ->
+                WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
+                    systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    hide(WindowInsetsCompat.Type.navigationBars())
+                }
+            }
             device.wait(Until.hasObject(By.textContains("WhoStarts")), 10_000)
             Thread.sleep(1_500)
+            dismissSystemDialogs()
             action()
             device.waitForIdle()
+            dismissSystemDialogs()
             device.takeScreenshot(File(outDir, "$name.png"))
+        }
+    }
+
+    /** Slow emulators sometimes pop "X isn't responding"; tap Wait so it's gone. */
+    private fun dismissSystemDialogs() {
+        repeat(3) {
+            val wait = device.findObject(By.text("Wait")) ?: return
+            if (!device.hasObject(By.textContains("isn't responding"))) return
+            wait.click()
+            Thread.sleep(1_000)
         }
     }
 
