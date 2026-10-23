@@ -1,9 +1,8 @@
 package com.example.pooltracker
 
 import android.content.Context
-import androidx.core.view.WindowCompat
+import android.graphics.Bitmap
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -71,20 +70,21 @@ class StoreScreenshots {
     private fun shoot(name: String, seed: List<Matchup>, action: () -> Unit = {}) {
         Storage.save(context, seed)
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            // Hide the nav bar / tablet taskbar so only the app and status bar show.
-            scenario.onActivity { activity ->
-                WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
-                    systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    hide(WindowInsetsCompat.Type.navigationBars())
-                }
-            }
             device.wait(Until.hasObject(By.textContains("WhoStarts")), 10_000)
             Thread.sleep(1_500)
             dismissSystemDialogs()
             action()
             device.waitForIdle()
             dismissSystemDialogs()
-            device.takeScreenshot(File(outDir, "$name.png"))
+            // Crop off the nav bar / tablet taskbar so only the status bar and app show.
+            var navBottom = 0
+            scenario.onActivity { activity ->
+                val insets = WindowInsetsCompat.toWindowInsetsCompat(activity.window.decorView.rootWindowInsets)
+                navBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            }
+            val shot = instrumentation.uiAutomation.takeScreenshot()
+            val cropped = Bitmap.createBitmap(shot, 0, 0, shot.width, shot.height - navBottom)
+            File(outDir, "$name.png").outputStream().use { cropped.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
 
