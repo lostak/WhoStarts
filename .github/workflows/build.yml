@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -20,7 +22,7 @@ jobs:
       - name: Grant execute permission for gradlew
         run: |
           if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.7
+            gradle wrapper --gradle-version 8.11.1
           fi
           chmod +x gradlew
 
@@ -32,3 +34,23 @@ jobs:
         with:
           name: pool-tracker-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Decode signing key
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build signed release bundle
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        env:
+          SIGNING_KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      - name: Upload release bundle
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: whostarts-release-aab
+          path: app/build/outputs/bundle/release/app-release.aab
