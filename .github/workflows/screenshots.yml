@@ -11,6 +11,8 @@ on:
 jobs:
   screenshots:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -65,3 +67,14 @@ jobs:
         with:
           name: store-screenshots
           path: screens/
+
+      - name: Commit screenshots to repo
+        run: |
+          mkdir -p store/screenshots
+          cp screens/*.png store/screenshots/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add store/screenshots
+          git commit -m "Update store screenshots [skip ci]" || exit 0
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
