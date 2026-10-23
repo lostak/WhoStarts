@@ -85,8 +85,14 @@ class StoreScreenshots {
         shoot("1-matchups", listOf(rivalry, doubles, threeWay))
 
         shoot("2-history", listOf(rivalry, doubles, threeWay)) {
-            tap(By.textStartsWith("History ("))
-            Thread.sleep(1_500)
+            val history = device.wait(Until.findObject(By.textStartsWith("History (")), 10_000)!!
+            val c = history.visibleCenter
+            device.executeShellCommand("input tap ${c.x} ${c.y}")
+            // Retry once if the dialog didn't open.
+            if (!device.wait(Until.hasObject(By.text("Momentum")), 4_000)) {
+                device.executeShellCommand("input tap ${c.x} ${c.y}")
+            }
+            Thread.sleep(2_500)
         }
 
         shoot("3-coin-flip", listOf(
