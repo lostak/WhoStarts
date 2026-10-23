@@ -13,6 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: phone
+            profile: pixel_2
+          - name: tablet-7in
+            profile: Nexus 7 2013
+          - name: tablet-10in
+            profile: pixel_tablet
     steps:
       - uses: actions/checkout@v7
 
@@ -44,7 +54,7 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
-          profile: pixel_2
+          profile: ${{ matrix.profile }}
           disable-animations: false
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
@@ -65,16 +75,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: store-screenshots
+          name: store-screenshots-${{ matrix.name }}
           path: screens/
 
       - name: Commit screenshots to repo
         run: |
-          mkdir -p store/screenshots
-          cp screens/*.png store/screenshots/
+          mkdir -p store/screenshots/${{ matrix.name }}
+          cp screens/*.png store/screenshots/${{ matrix.name }}/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add store/screenshots
           git commit -m "Update store screenshots [skip ci]" || exit 0
-          git pull --rebase origin ${{ github.ref_name }}
-          git push origin HEAD:${{ github.ref_name }}
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin ${{ github.ref_name }} && git push origin HEAD:${{ github.ref_name }} && break
+            sleep $((i * 5))
+          done
