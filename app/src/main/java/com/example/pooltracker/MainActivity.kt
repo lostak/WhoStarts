@@ -29,8 +29,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
@@ -92,6 +94,8 @@ class MainActivity : ComponentActivity() {
 /** Largest number of teams a single matchup may hold. */
 const val MAX_TEAMS = 8
 
+const val PRIVACY_POLICY_URL = "https://github.com/lostak/WhoStarts/blob/master/PRIVACY.md"
+
 /** Preset palette offered when picking a team color. */
 val TeamColorChoices = listOf(
     Color(0xFF1C5A3D), // felt green
@@ -132,6 +136,22 @@ fun PoolTrackerApp(viewModel: PoolViewModel = viewModel()) {
                         EightBallMark(size = 28.dp)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text("WhoStarts", fontWeight = FontWeight.Bold)
+                    }
+                },
+                actions = {
+                    var menuOpen by remember { mutableStateOf(false) }
+                    val uriHandler = LocalUriHandler.current
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = CueCream)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Privacy policy") },
+                            onClick = {
+                                menuOpen = false
+                                uriHandler.openUri(PRIVACY_POLICY_URL)
+                            }
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
