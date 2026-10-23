@@ -71,6 +71,11 @@ jobs:
             adb pull /sdcard/Android/data/com.lostak.whostarts/files/screens/. screens/
             ls -la screens
 
+      - name: Pad to exact 16:9 / 9:16
+        run: |
+          pip install --quiet pillow
+          python3 tools/pad_screenshots.py screens
+
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v7
