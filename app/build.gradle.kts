@@ -15,6 +15,21 @@ android {
         versionName = "1.0"
     }
 
+    flavorDimensions += "tier"
+    productFlavors {
+        create("free") {
+            dimension = "tier"
+            resValue("string", "app_name", "WhoStarts")
+            buildConfigField("boolean", "SHOW_ADS", "true")
+        }
+        create("pro") {
+            dimension = "tier"
+            applicationIdSuffix = ".pro"
+            resValue("string", "app_name", "WhoStarts Pro")
+            buildConfigField("boolean", "SHOW_ADS", "false")
+        }
+    }
+
     val keystorePath = System.getenv("SIGNING_KEYSTORE_PATH")
     signingConfigs {
         if (keystorePath != null) {
@@ -47,6 +62,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

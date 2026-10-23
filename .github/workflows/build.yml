@@ -26,14 +26,20 @@ jobs:
           fi
           chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build debug APKs
+        run: ./gradlew assembleFreeDebug assembleProDebug
 
-      - name: Upload APK artifact
+      - name: Upload free debug APK
         uses: actions/upload-artifact@v7
         with:
           name: pool-tracker-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/free/debug/app-free-debug.apk
+
+      - name: Upload Pro debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: whostarts-pro-debug-apk
+          path: app/build/outputs/apk/pro/debug/app-pro-debug.apk
 
       - name: Decode signing key
         if: ${{ env.SIGNING_PASSWORD != '' }}
@@ -46,11 +52,18 @@ jobs:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
           SIGNING_KEY_ALIAS: upload
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: ./gradlew bundleRelease
+        run: ./gradlew bundleFreeRelease bundleProRelease
 
-      - name: Upload release bundle
+      - name: Upload free release bundle
         if: ${{ env.SIGNING_PASSWORD != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: whostarts-release-aab
-          path: app/build/outputs/bundle/release/app-release.aab
+          path: app/build/outputs/bundle/freeRelease/app-free-release.aab
+
+      - name: Upload Pro release bundle
+        if: ${{ env.SIGNING_PASSWORD != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: whostarts-pro-release-aab
+          path: app/build/outputs/bundle/proRelease/app-pro-release.aab
