@@ -39,3 +39,6 @@ under `app/build/outputs/apk/debug/` and transfer it to a phone to install
 - Swap `Storage` for a Room database if the list grows large.
 - Add editing of existing matchups (currently: delete and re-add).
 - Add a stats screen aggregating wins across all matchups.
+
+## Launching on Google Play
+See [`launch/README.md`](launch/README.md) for the store listings, Data safety and content rating answers, graphics, and the release checklist. The privacy policy lives in `docs/privacy.html` (served by GitHub Pages) and `PRIVACY.md`.
